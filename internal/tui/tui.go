@@ -61,6 +61,9 @@ func New(c *core.Core) Model {
 	ti.Prompt = ""
 	ti.SetVirtualCursor(true)
 	m := Model{core: c, mode: modeREPL, input: ti, colorPrompt: c.Settings().ColorPrompt}
+	// Focus here, not in Init: Init has a value receiver, so focusing there would
+	// only focus a discarded copy, leaving the real textinput unable to type.
+	m.input.Focus()
 	m.refreshPrompt()
 	return m
 }

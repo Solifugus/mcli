@@ -78,6 +78,19 @@ func contains(ss []string, want string) bool {
 	return false
 }
 
+// TestInputFocusedAfterNew guards the bug where Init() focused a value-receiver
+// copy of the model, leaving the real textinput unfocused so it ignored all
+// typing. A model straight from New() (no manual Focus) must accept keys.
+func TestInputFocusedAfterNew(t *testing.T) {
+	var mdl tea.Model = *newTestModel(t) // no manual Focus()
+	for _, r := range `\help` {
+		mdl, _ = mdl.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if got := mdl.(Model).input.Value(); got != `\help` {
+		t.Fatalf("typing into a fresh model produced %q; input is not focused", got)
+	}
+}
+
 func TestTabKeyCompletes(t *testing.T) {
 	m := newTestModel(t)
 	m.input.SetValue(`\wo`)
