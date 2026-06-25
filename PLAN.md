@@ -25,7 +25,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] `cmd/mcli/main.go` run-mode dispatch (TUI default vs `mcp serve`, plus help/version)
 - [x] Package skeleton: `internal/core/{config,workspace,history}`, placeholder `internal/{tui,mcp,ai}`
 - [x] `.gitignore` (binaries, build output, OS cruft)
-- [x] CI: `go build` + `go vet` + `go test` + cross-compile matrix (linux/darwin/windows)
+- [~] CI: workflow written but **parked** at `.github/ci.yml.disabled` — the push token
+  lacks `workflow` scope so it can't live under `.github/workflows/`. See `.github/README.md`
+  to activate (add `workflow` scope to the PAT, or add the file via the GitHub web UI).
 
 ## Phase 1 — Core and configuration
 - [x] `~/.mcli` layout creation via `os.UserHomeDir()` path resolution (`internal/core/config`)
