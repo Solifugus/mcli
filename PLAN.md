@@ -10,11 +10,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 4 complete. SQL files + external `\edit`, alt-screen grid viewer (`\grid`),
-  and bracketed-paste→`\edit` routing all done and verified against the real DB.
-- **Next up:** Phase 5 — import/export (`internal/core/transfer`): CSV export then import,
-  TSV, pipe-delimited, Excel `.xlsx`, fixed-width flat files (with flat-file grid editing).
-  Implemented once against RowStream/RunStatement, uniform across adapters (§16, §22).
+- **Phase:** 5 mostly complete. CSV/TSV/pipe + Excel `.xlsx` import/export all working
+  and round-trip-verified against real Postgres. Remaining: fixed-width flat files,
+  which is underspecified (column-width spec source) and includes an editable grid.
+- **Next up:** decide the fixed-width approach with the user, OR move to Phase 6
+  (additional adapters: MySQL, Oracle, DB2-tagged) and circle back to fixed-width.
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -75,8 +75,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] CSV export, then CSV import (`\export query|table|current to <path>`, `\import <path> into <table>`)
 - [x] TSV and pipe-delimited (delimiter inferred from extension: .csv/.tsv/.psv)
       — verified round-trip against real Postgres (export → import → counts match)
-- [ ] Excel `.xlsx`
-- [ ] Fixed-width flat files (with flat-file grid editing)
+- [x] Excel `.xlsx` (export query/table/current; import with optional `sheet <name>`) —
+      verified round-trip against real Postgres; pure-Go via `xuri/excelize/v2`
+- [ ] Fixed-width flat files (with flat-file grid editing) — needs a design decision on
+      where the column-width spec comes from; the grid-editing part needs an editable grid
 
 ## Phase 6 — Additional adapters
 - [ ] MySQL / MariaDB (`go-sql-driver/mysql`)

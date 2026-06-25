@@ -55,7 +55,12 @@ func (c *Core) exportSQL(ctx context.Context, sql, destPath string) (int, error)
 	}
 	defer f.Close()
 
-	n, err := transfer.ExportStream(f, rs, transfer.DelimiterForPath(destPath))
+	var n int
+	if transfer.IsXLSX(destPath) {
+		n, err = transfer.ExportXLSXStream(f, rs, "")
+	} else {
+		n, err = transfer.ExportStream(f, rs, transfer.DelimiterForPath(destPath))
+	}
 	if err != nil {
 		return n, err
 	}
@@ -71,7 +76,12 @@ func (c *Core) ExportRows(cols []string, rows [][]string, destPath string) (int,
 	}
 	defer f.Close()
 
-	n, err := transfer.ExportRows(f, cols, rows, transfer.DelimiterForPath(destPath))
+	var n int
+	if transfer.IsXLSX(destPath) {
+		n, err = transfer.ExportXLSXRows(f, cols, rows, "")
+	} else {
+		n, err = transfer.ExportRows(f, cols, rows, transfer.DelimiterForPath(destPath))
+	}
 	if err != nil {
 		return n, err
 	}
@@ -87,9 +97,11 @@ func (c *Core) createExportFile(destPath string) (*os.File, error) {
 	return os.Create(path)
 }
 
-// ImportFile loads a delimited file (header row required) into a table, inserting
-// rows in batches via RunStatement. The header names become the target columns.
-func (c *Core) ImportFile(ctx context.Context, srcPath, table string) (int, error) {
+// ImportFile loads a delimited or .xlsx file (header row required) into a table,
+// inserting rows in batches via RunStatement. The header names become the target
+// columns. sheet selects the worksheet for .xlsx imports ("" = first sheet) and
+// is ignored for delimited files.
+func (c *Core) ImportFile(ctx context.Context, srcPath, table, sheet string) (int, error) {
 	if c.conn == nil {
 		return 0, ErrNotConnected
 	}
@@ -99,7 +111,13 @@ func (c *Core) ImportFile(ctx context.Context, srcPath, table string) (int, erro
 	}
 	defer f.Close()
 
-	header, rows, err := transfer.ReadDelimited(f, transfer.DelimiterForPath(srcPath))
+	var header []string
+	var rows [][]string
+	if transfer.IsXLSX(srcPath) {
+		header, rows, err = transfer.ReadXLSX(f, sheet)
+	} else {
+		header, rows, err = transfer.ReadDelimited(f, transfer.DelimiterForPath(srcPath))
+	}
 	if err != nil {
 		return 0, err
 	}

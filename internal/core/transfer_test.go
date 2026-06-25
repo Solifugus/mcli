@@ -82,7 +82,7 @@ func TestExportRowsToFile(t *testing.T) {
 
 func TestImportExportRequireConnection(t *testing.T) {
 	c, _ := Open(t.TempDir())
-	if _, err := c.ImportFile(t.Context(), "x.csv", "t"); err == nil {
+	if _, err := c.ImportFile(t.Context(), "x.csv", "t", ""); err == nil {
 		t.Error("ImportFile without connection should error")
 	}
 	if _, err := c.ExportTable(t.Context(), "t", "x.csv"); err == nil {

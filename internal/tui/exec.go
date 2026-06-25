@@ -149,18 +149,27 @@ func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
 	}
 }
 
-// cmdImport loads a delimited file into a table: \import <path> into <table>.
+// cmdImport loads a delimited or .xlsx file into a table:
+//
+//	\import <path> into <table>
+//	\import <path> sheet <name> into <table>   (xlsx)
 func (m *Model) cmdImport(args []string) (cmdResult, asyncRun) {
-	const usage = `usage: \import <path> into <table>`
+	const usage = `usage: \import <path> [sheet <name>] into <table>`
 	intoIdx := indexOf(args, "into")
-	if intoIdx != 1 || intoIdx == len(args)-1 {
+	if intoIdx < 1 || intoIdx == len(args)-1 {
 		return out(usage), nil
 	}
 	src := args[0]
 	table := args[intoIdx+1]
+
+	sheet := ""
+	if si := indexOf(args, "sheet"); si > 0 && si+1 < intoIdx {
+		sheet = strings.Trim(args[si+1], `"'`)
+	}
+
 	c := m.core
 	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
-		n, err := c.ImportFile(ctx, src, table)
+		n, err := c.ImportFile(ctx, src, table, sheet)
 		if err != nil {
 			return asyncResultMsg{err: err}
 		}
