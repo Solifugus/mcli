@@ -10,10 +10,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 1 complete (core + config). Phases 0 and 1 done.
-- **Next up:** Phase 2 — Bubble Tea v2 REPL shell. Toolchain is ready; next add the
-  `charm.land/bubbletea/v2` + `bubbles/v2` + `lipgloss/v2` deps and build the root
-  model with `repl` mode.
+- **Phase:** 2 in progress. REPL mechanics done (root model, Enter-executes,
+  workspace commands, scrollback, quit); UX polish remaining.
+- **Next up:** Phase 2 remainder — syntax highlight (Chroma), history ring (Up/Down),
+  Tab completion (commands + workspace files), env-color prompt (§18), bracketed-paste
+  routing to `\edit`. Highlight/paste-to-`\edit` partly depend on Phase 3/4, so the
+  next concrete steps are the history ring, Tab completion, and env-color prompt.
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -38,13 +40,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] No UI dependencies in `internal/core` (config/workspace/history import only stdlib)
 
 ## Phase 2 — REPL shell (TUI)
-- [ ] Bubble Tea v2 root model + mode state machine (`repl` mode)
-- [ ] Single-line input, **Enter executes**, no statement buffer
+- [x] Bubble Tea v2 root model + mode state machine (`repl` mode; `grid` reserved)
+- [x] Single-line input, **Enter executes**, no statement buffer
+- [x] `\enter` and workspace commands (§12), `\help`, `\quit`, scrollback via `tea.Println`
+- [x] `core` facade (`internal/core`) shared by both front-ends; `cmd/mcli` launches the TUI
 - [ ] Chroma single-line syntax highlighting (dialect by connection)
 - [ ] History ring (Up/Down) and Tab completion (commands + files first)
 - [ ] Prompt context + environment color (§18)
 - [ ] Bracketed-paste routing (multi-line paste opens `\edit`)
-- [ ] `\enter` and workspace commands (§12)
 
 ## Phase 3 — First database adapter (pure Go)
 - [ ] Adapter interface + registry (`internal/core/adapter`, §22)

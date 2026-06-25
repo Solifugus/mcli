@@ -6,6 +6,10 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/config"
+	"github.com/Solifugus/mcli/internal/tui"
 )
 
 // version is the build version. Wire this to ldflags / build info later.
@@ -64,9 +68,17 @@ Usage:
 `)
 }
 
-// runTUI launches the Bubble Tea v2 front-end. Implemented in Phase 2.
+// runTUI opens the core and launches the Bubble Tea v2 front-end.
 func runTUI() error {
-	return fmt.Errorf("interactive TUI not yet implemented (Phase 2); see PLAN.md")
+	root, err := config.DefaultRoot()
+	if err != nil {
+		return err
+	}
+	c, err := core.Open(root)
+	if err != nil {
+		return err
+	}
+	return tui.Run(c)
 }
 
 // runMCP runs the headless MCP server over stdio. Implemented in Phase 9.
