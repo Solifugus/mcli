@@ -10,25 +10,29 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 0 — project bootstrap (not yet started; only design + docs exist)
-- **Next up:** Phase 1, task 1 — create `go.mod` and the `cmd/mcli` entrypoint skeleton.
+- **Phase:** 1 complete (core + config). Phases 0 and 1 done.
+- **Next up:** Phase 2 — Bubble Tea v2 REPL shell. First bump `go.mod` to 1.25
+  (Bubble Tea v2's required Go floor) and confirm the toolchain is available.
 - **Last updated:** 2026-06-24
+- **Notes:** `go.mod` is on Go 1.24 (the installed toolchain); Phases 0–1 are pure
+  stdlib. Must bump to 1.25 before adding Bubble Tea in Phase 2. `gh` CLI is not
+  installed — use plain `git`.
 
 ---
 
 ## Phase 0 — Project bootstrap
-- [ ] `go.mod` (`module github.com/Solifugus/mcli`, Go 1.25+)
-- [ ] `cmd/mcli/main.go` run-mode dispatch (TUI default vs `mcp serve`)
-- [ ] Directory skeleton for `internal/core`, `internal/tui`, `internal/adapters`, `internal/mcp`, `internal/ai`
-- [ ] `.gitignore` (binaries, build output, OS cruft)
-- [ ] CI: `go build` + `go test` + cross-compile check (GOOS linux/darwin/windows)
+- [x] `go.mod` (`module github.com/Solifugus/mcli`, Go 1.24 for now — bump to 1.25 at Phase 2)
+- [x] `cmd/mcli/main.go` run-mode dispatch (TUI default vs `mcp serve`, plus help/version)
+- [x] Package skeleton: `internal/core/{config,workspace,history}`, placeholder `internal/{tui,mcp,ai}`
+- [x] `.gitignore` (binaries, build output, OS cruft)
+- [x] CI: `go build` + `go vet` + `go test` + cross-compile matrix (linux/darwin/windows)
 
 ## Phase 1 — Core and configuration
-- [ ] `~/.mcli` layout creation via `os.UserHomeDir()` path resolution (`internal/core/config`)
-- [ ] Load/save `settings.json`, `servers.json`, `ai.json`
-- [ ] Workspace manager + default workspace + `workspace.json` (`internal/core/workspace`)
-- [ ] Per-workspace `history.log` writer (`internal/core/history`)
-- [ ] No UI dependencies in `internal/core` (enforced by package boundaries)
+- [x] `~/.mcli` layout creation via `os.UserHomeDir()` path resolution (`internal/core/config`)
+- [x] Load/save `settings.json`, `servers.json`, `ai.json` (defaults when absent, 0600 perms)
+- [x] Workspace manager + default workspace + `workspace.json` (create/list/load/save/rename/delete, name validation)
+- [x] Per-workspace `history.log` writer (`internal/core/history`)
+- [x] No UI dependencies in `internal/core` (config/workspace/history import only stdlib)
 
 ## Phase 2 — REPL shell (TUI)
 - [ ] Bubble Tea v2 root model + mode state machine (`repl` mode)

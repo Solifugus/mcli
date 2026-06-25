@@ -1,0 +1,15 @@
+# Compiled binary
+/mcli
+/mcli.exe
+/dist/
+
+# Go build/test artifacts
+*.exe
+*.test
+*.out
+/vendor/
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
