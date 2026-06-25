@@ -29,9 +29,14 @@ type Model struct {
 	core *core.Core
 	mode mode
 
-	input    textinput.Model
-	width    int
-	quitting bool
+	input         textinput.Model
+	width, height int
+	quitting      bool
+
+	// Grid surface (alt-screen). lastResult is the most recent query result,
+	// openable with \grid.
+	grid       gridModel
+	lastResult *resultSet
 
 	// Snapshots of Core state read at safe points on the UI thread. View renders
 	// from these rather than reading Core, so the render path never races the
@@ -105,11 +110,22 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(max(1, msg.Width-len(m.prompt)-1))
+		if m.mode == modeGrid {
+			m.grid = m.grid.resize(msg.Width, msg.Height)
+		}
 		return m, nil
 	case tea.KeyPressMsg:
+		if m.mode == modeGrid {
+			return m.handleGridKey(msg)
+		}
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		if m.mode == modeREPL && !m.running {
+			return m.handlePaste(msg)
+		}
+		return m, nil
 	case asyncResultMsg:
 		return m.handleAsyncResult(msg)
 	case editDoneMsg:
@@ -119,8 +135,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Println("edited " + msg.name)
 	}
+	if m.mode == modeGrid {
+		var cmd tea.Cmd
+		m.grid, cmd = m.grid.Update(msg)
+		return m, cmd
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+// pasteScratchFile is where a multi-line paste is parked before editing.
+const pasteScratchFile = "scratch"
+
+// handlePaste routes bracketed paste (§11): a single-line paste lands in the
+// input like typing, while a paste containing newlines is written to the
+// scratch file and opened in the editor — so it does not fire as several
+// partial executions under the Enter-executes rule.
+func (m Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if !strings.Contains(msg.Content, "\n") {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+	if err := m.core.WriteSQLFile(pasteScratchFile, msg.Content); err != nil {
+		return m, tea.Println("paste error: " + err.Error())
+	}
+	res, c := m.cmdEdit([]string{pasteScratchFile})
+	var cmds []tea.Cmd
+	cmds = append(cmds, tea.Printf("(multi-line paste opened in editor as %s.sql)", pasteScratchFile))
+	if len(res.lines) > 0 {
+		cmds = append(cmds, tea.Println(strings.Join(res.lines, "\n")))
+	}
+	if c != nil {
+		cmds = append(cmds, c)
+	}
+	return m, tea.Sequence(cmds...)
+}
+
+// handleGridKey routes keys while the grid is open. Esc/q/Ctrl-C return to the
+// REPL; everything else drives the table (scroll, paging).
+func (m Model) handleGridKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == tea.KeyEscape || msg.Code == 'q' ||
+		(msg.Mod == tea.ModCtrl && msg.Code == 'c') {
+		m.mode = modeREPL
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.grid, cmd = m.grid.Update(msg)
 	return m, cmd
 }
 
@@ -132,6 +194,9 @@ func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
 	m.running = false
 	m.cancel = nil
 	m.refreshPrompt() // connection/database may have changed
+	if msg.result != nil {
+		m.lastResult = msg.result
+	}
 
 	var lines []string
 	if msg.err != nil {
@@ -250,6 +315,13 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	switch {
+	case act.grid:
+		if m.lastResult == nil || len(m.lastResult.cols) == 0 {
+			cmds = append(cmds, tea.Println("no result to show — run a query first"))
+			break
+		}
+		m.mode = modeGrid
+		m.grid = newGrid(m.lastResult, m.width, m.height)
 	case act.async != nil:
 		ctx, cancel := context.WithCancel(context.Background())
 		m.running = true
@@ -272,13 +344,16 @@ func (m Model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
+	if m.mode == modeGrid {
+		v := tea.NewView(m.grid.View())
+		v.AltScreen = true
+		return v
+	}
 	content := m.styledPrompt() + renderInput(m.input.Value(), m.input.Position(), m.dialect, m.colorPrompt)
 	if m.running {
 		content = "running… (Ctrl-C to cancel)"
 	}
-	v := tea.NewView(content)
-	v.AltScreen = m.mode == modeGrid
-	return v
+	return tea.NewView(content)
 }
 
 // promptString builds the context prompt, e.g. "consumer-lending:etl:ETLDB> ".

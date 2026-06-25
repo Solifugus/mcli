@@ -11,8 +11,9 @@ import (
 // asyncResultMsg is delivered when a background command (connect, query, schema
 // introspection) finishes. Output is pre-formatted into lines off the UI thread.
 type asyncResultMsg struct {
-	lines []string
-	err   error
+	lines  []string
+	err    error
+	result *resultSet // non-nil for row-returning queries; openable in the grid
 }
 
 // asyncRun is a unit of background work returning a result message. It receives a
@@ -140,12 +141,14 @@ func (m *Model) sqlRunner(sql string) asyncRun {
 		}
 		defer rs.Close()
 
+		// Fetch up to gridRowCap so the full result can be opened in the grid;
+		// the inline view shows only the first maxRows.
 		cols := rs.Columns()
 		var rows [][]string
-		truncated := false
+		capped := false
 		for rs.Next() {
-			if maxRows > 0 && len(rows) >= maxRows {
-				truncated = true
+			if len(rows) >= gridRowCap {
+				capped = true
 				break
 			}
 			vals, err := rs.Values()
@@ -158,13 +161,22 @@ func (m *Model) sqlRunner(sql string) asyncRun {
 			return asyncResultMsg{err: err}
 		}
 
-		lines := renderTable(cols, rows)
-		if truncated {
-			lines = append(lines, fmt.Sprintf("(showing first %d rows; full-result grid view arrives in Phase 4)", maxRows))
-		} else {
+		inline := rows
+		inlineTrunc := false
+		if maxRows > 0 && len(rows) > maxRows {
+			inline = rows[:maxRows]
+			inlineTrunc = true
+		}
+		lines := renderTable(cols, inline)
+		switch {
+		case capped:
+			lines = append(lines, fmt.Sprintf("(showing first %d of %d+ rows; \\grid to view, refine with LIMIT)", len(inline), len(rows)))
+		case inlineTrunc:
+			lines = append(lines, fmt.Sprintf("(showing first %d of %d rows; \\grid to view all)", maxRows, len(rows)))
+		default:
 			lines = append(lines, fmt.Sprintf("(%d row%s)", len(rows), plural(len(rows))))
 		}
-		return asyncResultMsg{lines: lines}
+		return asyncResultMsg{lines: lines, result: &resultSet{cols: cols, rows: rows, truncated: capped}}
 	}
 }
 

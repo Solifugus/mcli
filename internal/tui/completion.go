@@ -6,8 +6,8 @@ import "strings"
 // still work but are intentionally not suggested.
 var replCommands = []string{
 	`\cat`, `\connect`, `\copy`, `\delete`, `\describe`, `\disconnect`,
-	`\edit`, `\enter`, `\files`, `\help`, `\list`, `\quit`, `\rename`,
-	`\run`, `\server`, `\workspace`, "use",
+	`\edit`, `\enter`, `\files`, `\grid`, `\help`, `\list`, `\quit`,
+	`\rename`, `\run`, `\server`, `\workspace`, "use",
 }
 
 // workspaceSubcommands are the second-token completions for \workspace.

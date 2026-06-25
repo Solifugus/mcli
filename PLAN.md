@@ -10,11 +10,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 4 in progress. SQL file commands + external `\edit` handoff done and
-  verified (incl. editor suspend/resume). Remaining: the alt-screen grid viewer,
-  "open full result in grid", and bracketed-paste→`\edit` routing.
-- **Next up:** the grid surface — alt-screen mode (`bubbles/table` + viewport, paging,
-  horizontal scroll, Esc/q to return) and wiring a truncated inline result to open in it.
+- **Phase:** 4 complete. SQL files + external `\edit`, alt-screen grid viewer (`\grid`),
+  and bracketed-paste→`\edit` routing all done and verified against the real DB.
+- **Next up:** Phase 5 — import/export (`internal/core/transfer`): CSV export then import,
+  TSV, pipe-delimited, Excel `.xlsx`, fixed-width flat files (with flat-file grid editing).
+  Implemented once against RowStream/RunStatement, uniform across adapters (§16, §22).
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -64,10 +64,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 ## Phase 4 — Grid surface, SQL files, external editor
 - [x] `\files`, `\edit` (external editor via `tea.ExecProcess`, resolution order §11), `\run`, `\cat`, `\copy`, `\rename`, `\delete` — verified incl. editor suspend/resume
 - [x] Log file operations to history (WRITE/EDIT/COPY/RENAME/DELETE)
-- [x] Tab completion for file commands; multi-line-paste→`\edit` still pending (needs grid? no — paste routing, can do anytime)
-- [ ] Alt-screen grid mode (`bubbles/table` + `viewport`, paging, horizontal scroll)
-- [ ] "Open full result in grid" from a truncated inline result
-- [ ] Bracketed-paste routing (multi-line paste opens `\edit`)
+- [x] Tab completion for file commands
+- [x] Alt-screen grid mode (`bubbles/table`, vertical paging/scroll, Esc/q to return);
+      horizontal scroll for very wide rows deferred (columns capped at 60, clipped to width)
+- [x] "Open full result in grid" via `\grid` from the last query (fetches up to
+      gridRowCap=10000; inline shows first max_rows with a `\grid` hint)
+- [x] Bracketed-paste routing: multi-line paste parks in scratch.sql and opens `\edit`
 
 ## Phase 5 — Import / export (`internal/core/transfer`)
 - [ ] CSV export, then CSV import

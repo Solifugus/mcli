@@ -29,11 +29,13 @@ func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); retur
 type action struct {
 	async asyncRun
 	cmd   tea.Cmd
+	grid  bool // open the last result in the alt-screen grid
 }
 
-func sync() action               { return action{} }
-func async(r asyncRun) action    { return action{async: r} }
-func runCmd(c tea.Cmd) action    { return action{cmd: c} }
+func sync() action            { return action{} }
+func async(r asyncRun) action { return action{async: r} }
+func runCmd(c tea.Cmd) action { return action{cmd: c} }
+func gridAction() action      { return action{grid: true} }
 
 // handleLine interprets a non-empty submitted line, returning the immediate
 // output and an action describing any follow-up work.
@@ -80,6 +82,8 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `\run`:
 		res, run := m.cmdRun(args)
 		return res, async(run)
+	case `\grid`:
+		return cmdResult{}, gridAction()
 	default:
 		if strings.HasPrefix(cmd, `\`) {
 			return out("unknown command: " + cmd + " (try \\help)"), sync()
@@ -322,6 +326,7 @@ func helpText() cmdResult {
 		`  \list databases|schemas|tables|views          list objects`,
 		`  \describe <table>                             show columns`,
 		`  <sql>                                         run SQL on the connection`,
+		`  \grid                                         open the last result in a scrollable grid`,
 		`  \files                                        list workspace SQL files`,
 		`  \edit <name>                                  edit a SQL file ($EDITOR)`,
 		`  \run <name>                                   run a SQL file`,
