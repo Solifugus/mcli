@@ -2,11 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/Solifugus/mcli/internal/core/adapter"
 )
+
+var errNoCurrentResult = errors.New("no current result — run a query first")
 
 // asyncResultMsg is delivered when a background command (connect, query, schema
 // introspection) finishes. Output is pre-formatted into lines off the UI thread.
@@ -99,6 +102,90 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 		}
 		return asyncResultMsg{lines: renderTable([]string{"column", "type", "nullable", "key"}, rows)}
 	}
+}
+
+// cmdExport writes a query, table, or the current result to a file (§16):
+//
+//	\export query <name> to <path>
+//	\export table <name> to <path>
+//	\export current to <path>
+func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
+	const usage = `usage: \export query <name>|table <name>|current to <path>`
+	toIdx := indexOf(args, "to")
+	if toIdx < 1 || toIdx == len(args)-1 {
+		return out(usage), nil
+	}
+	head := args[:toIdx]
+	dest := args[toIdx+1]
+	c := m.core
+
+	switch head[0] {
+	case "query":
+		if len(head) < 2 {
+			return out(usage), nil
+		}
+		name := head[1]
+		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+			return exportResult(c.ExportQueryFile(ctx, name, dest))(dest)
+		}
+	case "table":
+		if len(head) < 2 {
+			return out(usage), nil
+		}
+		name := head[1]
+		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+			return exportResult(c.ExportTable(ctx, name, dest))(dest)
+		}
+	case "current":
+		rs := m.lastResult
+		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+			if rs == nil {
+				return asyncResultMsg{err: errNoCurrentResult}
+			}
+			return exportResult(c.ExportRows(rs.cols, rs.rows, dest))(dest)
+		}
+	default:
+		return out(usage), nil
+	}
+}
+
+// cmdImport loads a delimited file into a table: \import <path> into <table>.
+func (m *Model) cmdImport(args []string) (cmdResult, asyncRun) {
+	const usage = `usage: \import <path> into <table>`
+	intoIdx := indexOf(args, "into")
+	if intoIdx != 1 || intoIdx == len(args)-1 {
+		return out(usage), nil
+	}
+	src := args[0]
+	table := args[intoIdx+1]
+	c := m.core
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		n, err := c.ImportFile(ctx, src, table)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		return asyncResultMsg{lines: []string{fmt.Sprintf("imported %d row%s into %s", n, plural(n), table)}}
+	}
+}
+
+// exportResult turns a (count, error) pair into a result-message builder keyed by
+// the destination path.
+func exportResult(n int, err error) func(dest string) asyncResultMsg {
+	return func(dest string) asyncResultMsg {
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		return asyncResultMsg{lines: []string{fmt.Sprintf("exported %d row%s to %s", n, plural(n), dest)}}
+	}
+}
+
+func indexOf(ss []string, want string) int {
+	for i, s := range ss {
+		if s == want {
+			return i
+		}
+	}
+	return -1
 }
 
 // cmdRun executes a workspace SQL file against the live connection, reusing the

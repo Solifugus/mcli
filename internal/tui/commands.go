@@ -84,6 +84,12 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 		return res, async(run)
 	case `\grid`:
 		return cmdResult{}, gridAction()
+	case `\export`:
+		res, run := m.cmdExport(args)
+		return res, async(run)
+	case `\import`:
+		res, run := m.cmdImport(args)
+		return res, async(run)
 	default:
 		if strings.HasPrefix(cmd, `\`) {
 			return out("unknown command: " + cmd + " (try \\help)"), sync()
@@ -327,6 +333,8 @@ func helpText() cmdResult {
 		`  \describe <table>                             show columns`,
 		`  <sql>                                         run SQL on the connection`,
 		`  \grid                                         open the last result in a scrollable grid`,
+		`  \export query <name>|table <name>|current to <path>   export to CSV/TSV/pipe`,
+		`  \import <path> into <table>                   load a delimited file into a table`,
 		`  \files                                        list workspace SQL files`,
 		`  \edit <name>                                  edit a SQL file ($EDITOR)`,
 		`  \run <name>                                   run a SQL file`,

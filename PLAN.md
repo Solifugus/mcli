@@ -72,8 +72,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Bracketed-paste routing: multi-line paste parks in scratch.sql and opens `\edit`
 
 ## Phase 5 — Import / export (`internal/core/transfer`)
-- [ ] CSV export, then CSV import
-- [ ] TSV and pipe-delimited
+- [x] CSV export, then CSV import (`\export query|table|current to <path>`, `\import <path> into <table>`)
+- [x] TSV and pipe-delimited (delimiter inferred from extension: .csv/.tsv/.psv)
+      — verified round-trip against real Postgres (export → import → counts match)
 - [ ] Excel `.xlsx`
 - [ ] Fixed-width flat files (with flat-file grid editing)
 
