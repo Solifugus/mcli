@@ -78,6 +78,24 @@ func contains(ss []string, want string) bool {
 	return false
 }
 
+func TestTabKeyCompletes(t *testing.T) {
+	m := newTestModel(t)
+	m.input.SetValue(`\wo`)
+	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := updated.(Model).input.Value(); got != `\workspace ` {
+		t.Errorf("Tab completion = %q, want %q", got, `\workspace `)
+	}
+}
+
+func TestUpKeyRecallsHistory(t *testing.T) {
+	m := newTestModel(t)
+	submitLine(m, `\help`)
+	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := updated.(Model).input.Value(); got != `\help` {
+		t.Errorf("Up recall = %q, want \\help", got)
+	}
+}
+
 func TestViewRendersPromptLine(t *testing.T) {
 	m := newTestModel(t)
 	v := m.View()

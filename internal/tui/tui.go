@@ -29,6 +29,12 @@ type Model struct {
 	input    textinput.Model
 	width    int
 	quitting bool
+
+	// In-memory command history ring (distinct from the persistent action log).
+	// histIdx walks history; histIdx == len(history) means "the live draft line".
+	history []string
+	histIdx int
+	draft   string
 }
 
 // New builds the root model around an opened core.
@@ -77,12 +83,64 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
-	if msg.Code == tea.KeyEnter {
+	switch msg.Code {
+	case tea.KeyEnter:
 		return m.submit()
+	case tea.KeyUp:
+		m.historyPrev()
+		return m, nil
+	case tea.KeyDown:
+		m.historyNext()
+		return m, nil
+	case tea.KeyTab:
+		newLine, candidates := m.complete(m.input.Value())
+		m.input.SetValue(newLine)
+		m.input.CursorEnd()
+		if len(candidates) > 0 {
+			return m, tea.Println(strings.Join(candidates, "   "))
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// historyPrev walks one step back into the command history, stashing the live
+// draft the first time so it can be restored on the way back down.
+func (m *Model) historyPrev() {
+	if m.histIdx == len(m.history) {
+		m.draft = m.input.Value()
+	}
+	if m.histIdx > 0 {
+		m.histIdx--
+		m.input.SetValue(m.history[m.histIdx])
+		m.input.CursorEnd()
+	}
+}
+
+// historyNext walks one step forward, restoring the draft past the newest entry.
+func (m *Model) historyNext() {
+	if m.histIdx >= len(m.history) {
+		return
+	}
+	m.histIdx++
+	if m.histIdx == len(m.history) {
+		m.input.SetValue(m.draft)
+	} else {
+		m.input.SetValue(m.history[m.histIdx])
+	}
+	m.input.CursorEnd()
+}
+
+// addHistory appends a submitted line, skipping consecutive duplicates, and
+// resets the ring cursor to the live draft position.
+func (m *Model) addHistory(line string) {
+	if n := len(m.history); n == 0 || m.history[n-1] != line {
+		m.history = append(m.history, line)
+	}
+	m.histIdx = len(m.history)
+	m.draft = ""
 }
 
 // submit commits the typed line to scrollback, clears the input, and dispatches.
@@ -94,6 +152,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 
 	line := strings.TrimSpace(raw)
 	if line != "" {
+		m.addHistory(line)
 		res := m.dispatch(line)
 		for _, l := range res.lines {
 			cmds = append(cmds, tea.Println(l))

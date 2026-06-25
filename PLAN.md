@@ -10,12 +10,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 2 in progress. REPL mechanics done (root model, Enter-executes,
-  workspace commands, scrollback, quit); UX polish remaining.
-- **Next up:** Phase 2 remainder — syntax highlight (Chroma), history ring (Up/Down),
-  Tab completion (commands + workspace files), env-color prompt (§18), bracketed-paste
-  routing to `\edit`. Highlight/paste-to-`\edit` partly depend on Phase 3/4, so the
-  next concrete steps are the history ring, Tab completion, and env-color prompt.
+- **Phase:** 2 substantially done. REPL mechanics + history ring + Tab completion
+  complete. The three remaining items each depend on a later phase (highlight needs a
+  dialect; env color needs a connected server; paste-to-`\edit` needs `\edit`), so
+  they're scheduled into Phases 3/4/7 rather than blocking here.
+- **Next up:** Phase 3 — adapter interface + registry and the first pure-Go adapter
+  (PostgreSQL via pgx, or SQL Server via go-mssqldb): `\connect`, `use`, `\list`,
+  `\describe`, query execution as `tea.Cmd` with Ctrl-C cancel, and `max_rows_default`.
+  Syntax highlighting and env-color prompt ride along once a connection exists.
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -44,10 +46,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Single-line input, **Enter executes**, no statement buffer
 - [x] `\enter` and workspace commands (§12), `\help`, `\quit`, scrollback via `tea.Println`
 - [x] `core` facade (`internal/core`) shared by both front-ends; `cmd/mcli` launches the TUI
-- [ ] Chroma single-line syntax highlighting (dialect by connection)
-- [ ] History ring (Up/Down) and Tab completion (commands + files first)
-- [ ] Prompt context + environment color (§18)
-- [ ] Bracketed-paste routing (multi-line paste opens `\edit`)
+- [x] History ring (Up/Down) and Tab completion (commands + workspace names; files in Phase 4)
+- [ ] Chroma single-line syntax highlighting (dialect by connection) — deferred to Phase 3 (needs a dialect)
+- [ ] Prompt context + environment color (§18) — context done; env color deferred to Phase 3/7 (needs a connected server)
+- [ ] Bracketed-paste routing (multi-line paste opens `\edit`) — deferred to Phase 4 (needs `\edit`)
 
 ## Phase 3 — First database adapter (pure Go)
 - [ ] Adapter interface + registry (`internal/core/adapter`, §22)
