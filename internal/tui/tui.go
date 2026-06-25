@@ -119,23 +119,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleAsyncResult clears the running state and commits the command's output.
+// The whole block is emitted as a single tea.Println: tea.Batch runs commands
+// concurrently with no ordering guarantee, which would let a trailing summary
+// like "(2 rows)" race ahead of the table it summarizes.
 func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
 	m.running = false
 	m.cancel = nil
 	m.refreshPrompt() // connection/database may have changed
 
-	var cmds []tea.Cmd
+	var lines []string
 	if msg.err != nil {
 		if errors.Is(msg.err, context.Canceled) {
-			cmds = append(cmds, tea.Println("canceled"))
+			lines = append(lines, "canceled")
 		} else {
-			cmds = append(cmds, tea.Println("error: "+msg.err.Error()))
+			lines = append(lines, "error: "+msg.err.Error())
 		}
 	}
-	for _, l := range msg.lines {
-		cmds = append(cmds, tea.Println(l))
+	lines = append(lines, msg.lines...)
+	if len(lines) == 0 {
+		return m, nil
 	}
-	return m, tea.Batch(cmds...)
+	return m, tea.Println(strings.Join(lines, "\n"))
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
