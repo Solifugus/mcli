@@ -23,7 +23,11 @@ type asyncRun func(ctx context.Context) asyncResultMsg
 
 func (m *Model) cmdConnect(args []string) (cmdResult, asyncRun) {
 	if len(args) < 1 {
-		return out(`usage: \connect <server>`), nil
+		names := sortedServerNames(m.core.Servers())
+		if len(names) == 0 {
+			return out(`usage: \connect <server> — no servers configured (see \server list)`), nil
+		}
+		return out(`usage: \connect <server>`, "available: "+strings.Join(names, ", ")), nil
 	}
 	name := args[0]
 	c := m.core

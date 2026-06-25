@@ -1,6 +1,12 @@
 package tui
 
-import "strings"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/Solifugus/mcli/internal/core/config"
+)
 
 // cmdResult is the outcome of handling one submitted line: the output lines to
 // commit to scrollback, and whether the app should quit. Keeping dispatch pure
@@ -30,6 +36,8 @@ func (m *Model) handleLine(line string) (cmdResult, asyncRun) {
 		return m.cmdWorkspace(args), nil
 	case `\enter`:
 		return m.cmdEnter(args), nil
+	case `\server`:
+		return m.cmdServer(args), nil
 	case `\connect`:
 		return m.cmdConnect(args)
 	case `\disconnect`:
@@ -60,6 +68,91 @@ func (m *Model) cmdDisconnect() cmdResult {
 		return errOut(err)
 	}
 	return out("disconnected from " + server)
+}
+
+// cmdServer lists configured servers or shows one's details. It is read-only;
+// add/edit/remove/test arrive in Phase 7.
+func (m *Model) cmdServer(args []string) cmdResult {
+	sub := "list"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "list":
+		names := sortedServerNames(m.core.Servers())
+		if len(names) == 0 {
+			return out(`no servers configured — add one to ~/.mcli/servers.json (\server add arrives in Phase 7)`)
+		}
+		servers := m.core.Servers()
+		cur := m.core.ConnServer()
+		rows := make([][]string, 0, len(names))
+		for _, n := range names {
+			s := servers[n]
+			marker := " "
+			if n == cur {
+				marker = "*"
+			}
+			rows = append(rows, []string{marker, n, s.Type, orNone(s.Environment), serverTarget(s)})
+		}
+		return cmdResult{lines: renderTable([]string{"", "name", "type", "env", "target"}, rows)}
+	case "show":
+		if len(args) < 2 {
+			return out(`usage: \server show <name>`)
+		}
+		s, ok := m.core.Servers()[args[1]]
+		if !ok {
+			return out("no server named " + args[1])
+		}
+		return out(serverDetails(args[1], s)...)
+	default:
+		return out(`usage: \server list|show`)
+	}
+}
+
+// serverTarget renders a one-line connection target for the server list.
+func serverTarget(s config.Server) string {
+	if s.ConnectionString != "" {
+		return s.ConnectionString
+	}
+	t := s.Host
+	if s.Port != 0 {
+		t += fmt.Sprintf(":%d", s.Port)
+	}
+	if s.DefaultDatabase != "" {
+		t += "/" + s.DefaultDatabase
+	}
+	return t
+}
+
+// serverDetails renders the per-field view for \server show. It never prints a
+// password — only the password source.
+func serverDetails(name string, s config.Server) []string {
+	lines := []string{
+		"server:   " + name,
+		"type:     " + s.Type,
+		"env:      " + orNone(s.Environment),
+	}
+	if s.ConnectionString != "" {
+		lines = append(lines, "conn:     "+s.ConnectionString)
+	} else {
+		lines = append(lines, "host:     "+orNone(s.Host))
+		if s.Port != 0 {
+			lines = append(lines, fmt.Sprintf("port:     %d", s.Port))
+		}
+		lines = append(lines, "database: "+orNone(s.DefaultDatabase))
+		lines = append(lines, "user:     "+orNone(s.User))
+	}
+	return append(lines, "password: "+orNone(s.PasswordSource))
+}
+
+// sortedServerNames returns the configured server names, sorted.
+func sortedServerNames(servers map[string]config.Server) []string {
+	names := make([]string, 0, len(servers))
+	for n := range servers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (m *Model) cmdWorkspace(args []string) cmdResult {
@@ -133,6 +226,7 @@ func helpText() cmdResult {
 		`commands:`,
 		`  \workspace list|create|rename|delete|status   manage workspaces`,
 		`  \enter <name>                                 switch workspace`,
+		`  \server list|show <name>                      list configured servers`,
 		`  \connect <server>                             connect to a configured server`,
 		`  \disconnect                                   close the connection`,
 		`  use <database>                                switch current database`,

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -22,8 +23,15 @@ func TestCompleteAmbiguousExtendsCommonPrefix(t *testing.T) {
 	if got != `\` {
 		t.Errorf("line changed unexpectedly: %q", got)
 	}
-	if len(cand) != len(replCommands) {
-		t.Errorf("candidates = %v, want all commands", cand)
+	// "\" matches every backslash command (but not the bare "use").
+	wantN := 0
+	for _, c := range replCommands {
+		if strings.HasPrefix(c, `\`) {
+			wantN++
+		}
+	}
+	if len(cand) != wantN {
+		t.Errorf("candidates = %v, want %d backslash commands", cand, wantN)
 	}
 }
 

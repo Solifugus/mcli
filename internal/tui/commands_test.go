@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/config"
 )
 
 // newTestModel opens a core in a temp dir and returns a model wired to it.
@@ -128,6 +129,66 @@ func TestWorkspaceUsageMessages(t *testing.T) {
 		if got := joinLines(dispatch(m, in)); !strings.Contains(got, want) {
 			t.Errorf("dispatch(%q) = %q, want substring %q", in, got, want)
 		}
+	}
+}
+
+func TestServerListEmpty(t *testing.T) {
+	m := newTestModel(t) // temp dir has no servers.json
+	if got := joinLines(dispatch(m, `\server list`)); !strings.Contains(got, "no servers configured") {
+		t.Errorf("server list (empty) = %q", got)
+	}
+}
+
+func TestServerListAndShow(t *testing.T) {
+	// Write a servers.json, then open a Core so it loads the server.
+	root := t.TempDir()
+	cs := config.NewStore(root)
+	if err := cs.EnsureRoot(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.SaveServers(config.ServersConfig{Servers: map[string]config.Server{
+		"local_pg": {Type: "postgres", Environment: "dev", Host: "localhost", Port: 5432, DefaultDatabase: "app", User: "me", PasswordSource: "env:PG_PW"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := core.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm := New(c)
+	m := &mm
+
+	list := joinLines(dispatch(m, `\server list`))
+	if !strings.Contains(list, "local_pg") || !strings.Contains(list, "postgres") || !strings.Contains(list, "localhost:5432/app") {
+		t.Errorf("server list = %q", list)
+	}
+
+	show := joinLines(dispatch(m, `\server show local_pg`))
+	if !strings.Contains(show, "user:     me") || !strings.Contains(show, "password: env:PG_PW") {
+		t.Errorf("server show = %q", show)
+	}
+	// Never leak an actual password (there isn't one, but guard the field name).
+	if strings.Contains(show, "PG_PW=") {
+		t.Errorf("server show leaked a value: %q", show)
+	}
+}
+
+func TestConnectNoArgListsServers(t *testing.T) {
+	root := t.TempDir()
+	cs := config.NewStore(root)
+	cs.EnsureRoot()
+	cs.SaveServers(config.ServersConfig{Servers: map[string]config.Server{
+		"alpha": {Type: "postgres"}, "beta": {Type: "postgres"},
+	}})
+	c, _ := core.Open(root)
+	mm := New(c)
+	res, run := mm.handleLine(`\connect`)
+	if run != nil {
+		t.Error("bare \\connect should be synchronous")
+	}
+	got := joinLines(res)
+	if !strings.Contains(got, "alpha") || !strings.Contains(got, "beta") {
+		t.Errorf("bare connect should list servers: %q", got)
 	}
 }
 

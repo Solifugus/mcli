@@ -80,6 +80,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] DB2 last, behind a build tag — decide pure-Go (`obaydullahmhs/go-db2`) vs CGo (`ibmdb/go_ibm_db`)
 
 ## Phase 7 — Server management and safety hardening
+- [x] `\server list` and `\server show <name>` (read-only) brought forward for usability;
+      bare `\connect` lists available servers; Tab completes server names + `\list` targets
 - [ ] `\server add/edit/remove/test` (§13)
 - [ ] Password sources: keyring (`zalando/go-keyring`) with `prompt`/`env:` fallback
 - [ ] Safety core: dangerous-SQL confirmation, read-only mode, production write guards, optional command blocking on prod (`internal/core/safety`, §17)

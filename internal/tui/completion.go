@@ -4,10 +4,19 @@ import "strings"
 
 // replCommands are the commands offered by Tab completion. Aliases (\q, \exit)
 // still work but are intentionally not suggested.
-var replCommands = []string{`\enter`, `\help`, `\quit`, `\workspace`}
+var replCommands = []string{
+	`\connect`, `\describe`, `\disconnect`, `\enter`, `\help`,
+	`\list`, `\quit`, `\server`, `\workspace`, "use",
+}
 
 // workspaceSubcommands are the second-token completions for \workspace.
 var workspaceSubcommands = []string{"create", "delete", "list", "rename", "status"}
+
+// serverSubcommands are the second-token completions for \server.
+var serverSubcommands = []string{"list", "show"}
+
+// listTargets are the second-token completions for \list.
+var listTargets = []string{"databases", "schemas", "tables", "views"}
 
 // complete returns the line with the token under the (end-of-line) cursor
 // expanded, plus any candidate list to display when the completion is ambiguous.
@@ -72,8 +81,27 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 		if tokenIndex == 2 && (subcommand == "rename" || subcommand == "delete") {
 			return m.workspaceNames()
 		}
+	case `\connect`:
+		if tokenIndex == 1 {
+			return m.serverNames()
+		}
+	case `\server`:
+		if tokenIndex == 1 {
+			return serverSubcommands
+		}
+		if tokenIndex == 2 && subcommand == "show" {
+			return m.serverNames()
+		}
+	case `\list`:
+		if tokenIndex == 1 {
+			return listTargets
+		}
 	}
 	return nil
+}
+
+func (m *Model) serverNames() []string {
+	return sortedServerNames(m.core.Servers())
 }
 
 func (m *Model) workspaceNames() []string {
