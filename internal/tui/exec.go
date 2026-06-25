@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Solifugus/mcli/internal/core/adapter"
@@ -109,8 +110,18 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 //	\export query <name> to <path>
 //	\export table <name> to <path>
 //	\export current to <path>
+//
+// A trailing `exact` token (fixed-width .txt/.fix only) forces the two-pass
+// streaming export that measures every row before writing — nothing curtailed,
+// at the cost of running the query twice. Without it, fixed-width export buffers
+// up to 10000 rows and notes when the result is larger.
 func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
-	const usage = `usage: \export query <name>|table <name>|current to <path>`
+	const usage = `usage: \export query <name>|table <name>|current to <path> [exact]`
+	exact := false
+	if n := len(args); n > 0 && args[n-1] == "exact" {
+		exact = true
+		args = args[:n-1]
+	}
 	toIdx := indexOf(args, "to")
 	if toIdx < 1 || toIdx == len(args)-1 {
 		return out(usage), nil
@@ -126,7 +137,7 @@ func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
 		}
 		name := head[1]
 		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
-			return exportResult(c.ExportQueryFile(ctx, name, dest))(dest)
+			return exportResult(c.ExportQueryFile(ctx, name, dest, exact))(dest)
 		}
 	case "table":
 		if len(head) < 2 {
@@ -134,7 +145,7 @@ func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
 		}
 		name := head[1]
 		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
-			return exportResult(c.ExportTable(ctx, name, dest))(dest)
+			return exportResult(c.ExportTable(ctx, name, dest, exact))(dest)
 		}
 	case "current":
 		rs := m.lastResult
@@ -142,32 +153,51 @@ func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
 			if rs == nil {
 				return asyncResultMsg{err: errNoCurrentResult}
 			}
-			return exportResult(c.ExportRows(rs.cols, rs.rows, dest))(dest)
+			n, err := c.ExportRows(rs.cols, rs.rows, dest)
+			return exportResult(n, rs.truncated, err)(dest)
 		}
 	default:
 		return out(usage), nil
 	}
 }
 
-// cmdImport loads a delimited or .xlsx file into a table:
+// cmdImport loads a delimited, .xlsx, or fixed-width file into a table:
 //
 //	\import <path> into <table>
-//	\import <path> sheet <name> into <table>   (xlsx)
+//	\import <path> sheet <name> into <table>      (xlsx)
+//	\import <path> widths 10,20,8 into <table>    (fixed-width)
+//
+// Fixed-width files carry no header, so `widths` is required and the comma-listed
+// field widths map positionally onto the table's columns in declared order.
 func (m *Model) cmdImport(args []string) (cmdResult, asyncRun) {
-	const usage = `usage: \import <path> [sheet <name>] into <table>`
+	const usage = `usage: \import <path> [sheet <name>|widths N,N,...] into <table>`
 	intoIdx := indexOf(args, "into")
 	if intoIdx < 1 || intoIdx == len(args)-1 {
 		return out(usage), nil
 	}
 	src := args[0]
 	table := args[intoIdx+1]
+	c := m.core
+
+	if wi := indexOf(args, "widths"); wi > 0 && wi+1 < intoIdx {
+		widths, err := parseWidths(args[wi+1])
+		if err != nil {
+			return errOut(err), nil
+		}
+		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+			n, err := c.ImportFixedFile(ctx, src, table, widths)
+			if err != nil {
+				return asyncResultMsg{err: err}
+			}
+			return asyncResultMsg{lines: []string{fmt.Sprintf("imported %d row%s into %s", n, plural(n), table)}}
+		}
+	}
 
 	sheet := ""
 	if si := indexOf(args, "sheet"); si > 0 && si+1 < intoIdx {
 		sheet = strings.Trim(args[si+1], `"'`)
 	}
 
-	c := m.core
 	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
 		n, err := c.ImportFile(ctx, src, table, sheet)
 		if err != nil {
@@ -177,14 +207,34 @@ func (m *Model) cmdImport(args []string) (cmdResult, asyncRun) {
 	}
 }
 
-// exportResult turns a (count, error) pair into a result-message builder keyed by
-// the destination path.
-func exportResult(n int, err error) func(dest string) asyncResultMsg {
+// parseWidths parses a comma-separated list of positive column widths, e.g.
+// "10,20,8", for fixed-width import.
+func parseWidths(s string) ([]int, error) {
+	parts := strings.Split(s, ",")
+	widths := make([]int, 0, len(parts))
+	for _, p := range parts {
+		w, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil || w <= 0 {
+			return nil, fmt.Errorf("invalid width %q: widths must be positive integers like 10,20,8", p)
+		}
+		widths = append(widths, w)
+	}
+	return widths, nil
+}
+
+// exportResult turns an export outcome into a result-message builder keyed by the
+// destination path. When truncated is set (a default fixed-width export that hit
+// the row cap), it appends a note pointing at the exact two-pass mode.
+func exportResult(n int, truncated bool, err error) func(dest string) asyncResultMsg {
 	return func(dest string) asyncResultMsg {
 		if err != nil {
 			return asyncResultMsg{err: err}
 		}
-		return asyncResultMsg{lines: []string{fmt.Sprintf("exported %d row%s to %s", n, plural(n), dest)}}
+		lines := []string{fmt.Sprintf("exported %d row%s to %s", n, plural(n), dest)}
+		if truncated {
+			lines = append(lines, fmt.Sprintf("(stopped at %d rows; re-run with `exact` to export all with measured widths)", n))
+		}
+		return asyncResultMsg{lines: lines}
 	}
 }
 

@@ -85,7 +85,7 @@ func TestImportExportRequireConnection(t *testing.T) {
 	if _, err := c.ImportFile(t.Context(), "x.csv", "t", ""); err == nil {
 		t.Error("ImportFile without connection should error")
 	}
-	if _, err := c.ExportTable(t.Context(), "t", "x.csv"); err == nil {
+	if _, _, err := c.ExportTable(t.Context(), "t", "x.csv", false); err == nil {
 		t.Error("ExportTable without connection should error")
 	}
 }

@@ -10,12 +10,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 5 mostly complete. CSV/TSV/pipe + Excel `.xlsx` import/export all working
-  and round-trip-verified against real Postgres. Remaining: fixed-width flat files,
-  which is underspecified (column-width spec source) and includes an editable grid.
-- **Next up:** decide the fixed-width approach with the user, OR move to Phase 6
-  (additional adapters: MySQL, Oracle, DB2-tagged) and circle back to fixed-width.
-- **Last updated:** 2026-06-24
+- **Phase:** 5 complete. CSV/TSV/pipe + Excel `.xlsx` + fixed-width (`.txt`/`.fix`)
+  import/export all working and round-trip-verified against real Postgres. The
+  flat-file editable grid (§11) is intentionally deferred — separate, larger feature.
+- **Next up:** Phase 6 — additional pure-Go adapters (MySQL/MariaDB, then Oracle;
+  DB2 last behind a build tag).
+- **Last updated:** 2026-06-25
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
   1.25.0. `gh` CLI is not installed — use plain `git`.
@@ -77,8 +77,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
       — verified round-trip against real Postgres (export → import → counts match)
 - [x] Excel `.xlsx` (export query/table/current; import with optional `sheet <name>`) —
       verified round-trip against real Postgres; pure-Go via `xuri/excelize/v2`
-- [ ] Fixed-width flat files (with flat-file grid editing) — needs a design decision on
-      where the column-width spec comes from; the grid-editing part needs an editable grid
+- [x] Fixed-width flat files (`.txt`/`.fix`): export derives widths from the data —
+      **default** buffers up to 10000 rows (notes truncation, points at `exact`);
+      **`exact`** keyword runs a two-pass streaming scan (measure, then re-run + write)
+      for flat memory with nothing curtailed. Import requires explicit `widths N,N,...`
+      (files are non-self-describing) and inserts positionally. Round-trip-verified
+      against real Postgres incl. NULL→blank→NULL. Flat-file grid editing deferred (§11).
 
 ## Phase 6 — Additional adapters
 - [ ] MySQL / MariaDB (`go-sql-driver/mysql`)

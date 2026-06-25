@@ -78,3 +78,59 @@ func TestImportProducesRunner(t *testing.T) {
 		t.Error("import with no connection should error")
 	}
 }
+
+func TestExportCurrentFixedWidth(t *testing.T) {
+	m := newTestModel(t)
+	m.lastResult = &resultSet{cols: []string{"id", "name"}, rows: [][]string{{"1", "alice"}, {"100", "bo"}}}
+	_, act := m.handleLine(`\export current to exports/cur.txt`)
+	msg := act.async(context.Background())
+	if msg.err != nil {
+		t.Fatalf("export current fixed: %v", msg.err)
+	}
+	// .txt routes to the fixed-width writer (alignment verified in the transfer
+	// package); here we just confirm the path is wired and rows are counted.
+	if !strings.Contains(strings.Join(msg.lines, "\n"), "exported 2 rows") {
+		t.Errorf("export message = %v", msg.lines)
+	}
+}
+
+func TestExportTruncatedNote(t *testing.T) {
+	out := exportResult(10000, true, nil)("big.txt")
+	if !strings.Contains(strings.Join(out.lines, "\n"), "exact") {
+		t.Errorf("truncated export should mention exact: %v", out.lines)
+	}
+}
+
+func TestExactKeywordStrippedFromExport(t *testing.T) {
+	m := newTestModel(t)
+	_, act := m.handleLine(`\export table members to out.txt exact`)
+	if act.async == nil {
+		t.Fatal("\\export ... exact should be async, not a usage error")
+	}
+}
+
+func TestImportWidthsParsing(t *testing.T) {
+	m := newTestModel(t)
+	// Bad widths -> sync error, never reaches an async runner.
+	_, act := m.handleLine(`\import f.txt widths 10,bad,8 into t`)
+	if act.async != nil {
+		t.Error("invalid widths should be a sync error")
+	}
+	// Good widths -> async runner (errors only because there's no connection).
+	_, act = m.handleLine(`\import f.txt widths 10,20,8 into t`)
+	if act.async == nil {
+		t.Fatal("valid \\import ... widths should be async")
+	}
+}
+
+func TestParseWidths(t *testing.T) {
+	got, err := parseWidths("10, 20,8")
+	if err != nil || len(got) != 3 || got[0] != 10 || got[1] != 20 || got[2] != 8 {
+		t.Fatalf("parseWidths = (%v,%v)", got, err)
+	}
+	for _, bad := range []string{"10,0,8", "10,-1", "10,x", ""} {
+		if _, err := parseWidths(bad); err == nil {
+			t.Errorf("parseWidths(%q) should error", bad)
+		}
+	}
+}
