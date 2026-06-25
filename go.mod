@@ -1,5 +1,6 @@
 module github.com/Solifugus/mcli
 
-// Phase 0–1 are pure stdlib. Bump to 1.25 when Bubble Tea v2 lands in Phase 2
-// (its v2 line sets the required Go floor — see docs/mcli-design.md §4).
-go 1.24
+// Go 1.25 is the floor set by Bubble Tea v2 (see docs/mcli-design.md §4).
+// With GOTOOLCHAIN=auto, `go` downloads 1.25 into the user cache on demand —
+// no system install or sudo required.
+go 1.25.0

@@ -11,12 +11,13 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 ## Current status
 
 - **Phase:** 1 complete (core + config). Phases 0 and 1 done.
-- **Next up:** Phase 2 — Bubble Tea v2 REPL shell. First bump `go.mod` to 1.25
-  (Bubble Tea v2's required Go floor) and confirm the toolchain is available.
+- **Next up:** Phase 2 — Bubble Tea v2 REPL shell. Toolchain is ready; next add the
+  `charm.land/bubbletea/v2` + `bubbles/v2` + `lipgloss/v2` deps and build the root
+  model with `repl` mode.
 - **Last updated:** 2026-06-24
-- **Notes:** `go.mod` is on Go 1.24 (the installed toolchain); Phases 0–1 are pure
-  stdlib. Must bump to 1.25 before adding Bubble Tea in Phase 2. `gh` CLI is not
-  installed — use plain `git`.
+- **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
+  auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
+  1.25.0. `gh` CLI is not installed — use plain `git`.
 
 ---
 
