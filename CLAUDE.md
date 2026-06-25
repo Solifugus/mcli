@@ -11,6 +11,11 @@ layout the design doc prescribes (summarized below) rather than inventing a new 
 and read the relevant design section before implementing a feature — the doc is the
 contract.
 
+**Track progress in `PLAN.md`.** It breaks the design's 11-phase plan into checkable
+tasks with a "Current status / next up" pointer at the top. Read it at the start of a
+session to see where things stand; tick boxes and update the pointer as work lands,
+and commit those changes alongside the code.
+
 ## What mcli is
 
 `mcli` is a multi-database command-line workbench (Go + Bubble Tea v2 TUI) for SQL
