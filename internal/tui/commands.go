@@ -14,26 +14,52 @@ func out(lines ...string) cmdResult      { return cmdResult{lines: lines} }
 func errOut(err error) cmdResult         { return cmdResult{lines: []string{"error: " + err.Error()}} }
 func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); return r }
 
-// dispatch interprets a non-empty submitted line and mutates core state.
-func (m *Model) dispatch(line string) cmdResult {
+// handleLine interprets a non-empty submitted line. It returns the immediate
+// output (cmdResult) and, for commands that perform I/O, a background runner.
+// Exactly one of the two carries the work: sync commands return a nil runner;
+// async commands return an empty cmdResult plus a runner (or a usage/error
+// cmdResult and a nil runner when their arguments are invalid).
+func (m *Model) handleLine(line string) (cmdResult, asyncRun) {
 	cmd, args := tokenize(line)
 	switch cmd {
 	case `\quit`, `\q`, `\exit`:
-		return cmdResult{quit: true}
+		return cmdResult{quit: true}, nil
 	case `\help`:
-		return helpText()
+		return helpText(), nil
 	case `\workspace`:
-		return m.cmdWorkspace(args)
+		return m.cmdWorkspace(args), nil
 	case `\enter`:
-		return m.cmdEnter(args)
+		return m.cmdEnter(args), nil
+	case `\connect`:
+		return m.cmdConnect(args)
+	case `\disconnect`:
+		return m.cmdDisconnect(), nil
+	case `\list`:
+		return m.cmdList(args)
+	case `\describe`:
+		return m.cmdDescribe(args)
+	case "use":
+		return m.cmdUse(args)
 	default:
 		if strings.HasPrefix(cmd, `\`) {
-			return out("unknown command: " + cmd + " (try \\help)")
+			return out("unknown command: " + cmd + " (try \\help)"), nil
 		}
-		// Bare input is SQL or `use <db>`; both need a live connection, which
-		// arrives in Phase 3.
-		return out("not connected — database commands arrive in Phase 3")
+		// Bare input is SQL, run against the live connection.
+		return cmdResult{}, m.sqlRunner(line)
 	}
+}
+
+// cmdDisconnect closes the connection. It is synchronous: closing is quick and
+// touching Core off the UI thread is unnecessary here.
+func (m *Model) cmdDisconnect() cmdResult {
+	if !m.core.Connected() {
+		return out("not connected")
+	}
+	server := m.core.ConnServer()
+	if err := m.core.Disconnect(); err != nil {
+		return errOut(err)
+	}
+	return out("disconnected from " + server)
 }
 
 func (m *Model) cmdWorkspace(args []string) cmdResult {
@@ -107,8 +133,16 @@ func helpText() cmdResult {
 		`commands:`,
 		`  \workspace list|create|rename|delete|status   manage workspaces`,
 		`  \enter <name>                                 switch workspace`,
+		`  \connect <server>                             connect to a configured server`,
+		`  \disconnect                                   close the connection`,
+		`  use <database>                                switch current database`,
+		`  \list databases|schemas|tables|views          list objects`,
+		`  \describe <table>                             show columns`,
+		`  <sql>                                         run SQL on the connection`,
 		`  \help                                         this help`,
 		`  \quit                                         exit (also Ctrl-C / Ctrl-D)`,
+		``,
+		`Ctrl-C cancels a running query; Ctrl-D quits.`,
 	)
 }
 

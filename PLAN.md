@@ -10,14 +10,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 2 substantially done. REPL mechanics + history ring + Tab completion
-  complete. The three remaining items each depend on a later phase (highlight needs a
-  dialect; env color needs a connected server; paste-to-`\edit` needs `\edit`), so
-  they're scheduled into Phases 3/4/7 rather than blocking here.
-- **Next up:** Phase 3 — adapter interface + registry and the first pure-Go adapter
-  (PostgreSQL via pgx, or SQL Server via go-mssqldb): `\connect`, `use`, `\list`,
-  `\describe`, query execution as `tea.Cmd` with Ctrl-C cancel, and `max_rows_default`.
-  Syntax highlighting and env-color prompt ride along once a connection exists.
+- **Phase:** 3 code-complete (Postgres adapter + `\connect`/`use`/`\list`/`\describe`/
+  SQL exec, async with Ctrl-C cancel, max_rows guardrail). Pending: live verification
+  against the user's real Postgres database.
+- **Next up:** (1) live-test against the user's DB (needs connection details), then
+  (2) optional ride-alongs — Chroma syntax highlighting + env-color prompt — or move
+  to Phase 4 (grid surface, SQL files, external editor).
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -52,11 +50,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] Bracketed-paste routing (multi-line paste opens `\edit`) — deferred to Phase 4 (needs `\edit`)
 
 ## Phase 3 — First database adapter (pure Go)
-- [ ] Adapter interface + registry (`internal/core/adapter`, §22)
-- [ ] First adapter: PostgreSQL (`pgx`) or SQL Server (`go-mssqldb`)
-- [ ] `\connect` / `use` / `\list` / `\describe` / query execution (§13–14)
-- [ ] Queries run as `tea.Cmd` with `context` cancel on `Ctrl-C`
-- [ ] `max_rows_default` guardrail + basic inline result display
+- [x] Adapter interface + registry (`internal/core/adapter`, §22)
+- [x] PostgreSQL via pgx (`internal/adapters/postgres`); registered through `internal/adapters`
+- [x] `\connect` / `use` / `\list` / `\describe` / bare-SQL execution (§13–14)
+- [x] Queries run as `tea.Cmd` with `context` cancel on Ctrl-C (prompt snapshot avoids races)
+- [x] `max_rows_default` guardrail + aligned inline result table
+- [ ] Live verification against a real Postgres (pending connection details from user)
+- [ ] Ride-alongs now unblocked: Chroma syntax highlighting (dialect available) and
+      env-color prompt (server environment available) — optional polish
 
 ## Phase 4 — Grid surface, SQL files, external editor
 - [ ] Alt-screen grid mode (`bubbles/table` + `viewport`, paging, horizontal scroll)

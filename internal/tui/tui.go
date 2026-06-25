@@ -6,6 +6,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -30,6 +32,16 @@ type Model struct {
 	width    int
 	quitting bool
 
+	// prompt is a snapshot of the context prompt. View renders this rather than
+	// reading Core, so the render path never races the background goroutine that
+	// mutates connection state. Refreshed at safe points on the UI thread.
+	prompt string
+
+	// Background command state. While running, new submissions are refused and
+	// Ctrl-C cancels via cancel() instead of quitting.
+	running bool
+	cancel  context.CancelFunc
+
 	// In-memory command history ring (distinct from the persistent action log).
 	// histIdx walks history; histIdx == len(history) means "the live draft line".
 	history []string
@@ -42,8 +54,15 @@ func New(c *core.Core) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.SetVirtualCursor(true)
-	return Model{core: c, mode: modeREPL, input: ti}
+	m := Model{core: c, mode: modeREPL, input: ti}
+	m.refreshPrompt()
+	return m
 }
+
+// refreshPrompt snapshots the context prompt from Core. Call only on the UI
+// thread (New, after a sync command, on an async result) — never concurrently
+// with a running background command.
+func (m *Model) refreshPrompt() { m.prompt = m.promptString() }
 
 // Run launches the interactive program.
 func Run(c *core.Core) error {
@@ -66,20 +85,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.input.SetWidth(max(1, msg.Width-len(m.promptString())-1))
+		m.input.SetWidth(max(1, msg.Width-len(m.prompt)-1))
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case asyncResultMsg:
+		return m.handleAsyncResult(msg)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
 }
 
+// handleAsyncResult clears the running state and commits the command's output.
+func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
+	m.running = false
+	m.cancel = nil
+	m.refreshPrompt() // connection/database may have changed
+
+	var cmds []tea.Cmd
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			cmds = append(cmds, tea.Println("canceled"))
+		} else {
+			cmds = append(cmds, tea.Println("error: "+msg.err.Error()))
+		}
+	}
+	for _, l := range msg.lines {
+		cmds = append(cmds, tea.Println(l))
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// Ctrl-C / Ctrl-D quit the app. (Ctrl-C will instead cancel a running query
-	// once query execution lands in Phase 3.)
 	if msg.Mod == tea.ModCtrl && (msg.Code == 'c' || msg.Code == 'd') {
+		// Ctrl-C cancels a running command rather than quitting; Ctrl-D always
+		// quits. With nothing running, Ctrl-C quits too.
+		if m.running && msg.Code == 'c' {
+			if m.cancel != nil {
+				m.cancel()
+			}
+			return m, nil
+		}
 		m.quitting = true
 		return m, tea.Quit
 	}
@@ -143,34 +190,57 @@ func (m *Model) addHistory(line string) {
 	m.draft = ""
 }
 
-// submit commits the typed line to scrollback, clears the input, and dispatches.
+// submit commits the typed line to scrollback, clears the input, and either
+// runs a synchronous command inline or launches a background command.
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	raw := m.input.Value()
 	m.input.Reset()
 
-	cmds := []tea.Cmd{tea.Printf("%s%s", m.promptString(), raw)}
+	cmds := []tea.Cmd{tea.Printf("%s%s", m.prompt, raw)}
 
 	line := strings.TrimSpace(raw)
-	if line != "" {
-		m.addHistory(line)
-		res := m.dispatch(line)
-		for _, l := range res.lines {
-			cmds = append(cmds, tea.Println(l))
-		}
-		if res.quit {
-			m.quitting = true
-			cmds = append(cmds, tea.Quit)
-		}
+	if line == "" {
+		return m, tea.Sequence(cmds...)
+	}
+	if m.running {
+		cmds = append(cmds, tea.Println("busy — a command is running (Ctrl-C to cancel)"))
+		return m, tea.Sequence(cmds...)
+	}
+
+	m.addHistory(line)
+	res, run := m.handleLine(line)
+	for _, l := range res.lines {
+		cmds = append(cmds, tea.Println(l))
+	}
+	if res.quit {
+		m.quitting = true
+		cmds = append(cmds, tea.Quit)
+		return m, tea.Sequence(cmds...)
+	}
+
+	if run != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		m.running = true
+		m.cancel = cancel
+		cmds = append(cmds, func() tea.Msg { return run(ctx) })
+	} else {
+		// A sync command may have changed the workspace; refresh the snapshot.
+		m.refreshPrompt()
 	}
 	return m, tea.Sequence(cmds...)
 }
 
-// View renders the live prompt line only; committed output lives in scrollback.
+// View renders the live line only; committed output lives in scrollback. While a
+// background command runs, the input is replaced by a status indicator.
 func (m Model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
-	v := tea.NewView(m.promptString() + m.input.View())
+	content := m.prompt + m.input.View()
+	if m.running {
+		content = "running… (Ctrl-C to cancel)"
+	}
+	v := tea.NewView(content)
 	v.AltScreen = m.mode == modeGrid
 	return v
 }
