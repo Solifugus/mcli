@@ -7,6 +7,7 @@ package core
 import (
 	"fmt"
 
+	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/config"
 	"github.com/Solifugus/mcli/internal/core/history"
 	"github.com/Solifugus/mcli/internal/core/workspace"
@@ -17,9 +18,15 @@ type Core struct {
 	cfg        *config.Store
 	workspaces *workspace.Manager
 	settings   config.Settings
+	servers    config.ServersConfig
 
 	current workspace.Workspace
 	hist    *history.Log
+
+	// Live connection state (nil when disconnected).
+	conn       adapter.Adapter
+	connServer string
+	dialect    adapter.Dialect
 }
 
 // Open initializes mcli rooted at the given ~/.mcli directory: it ensures the
@@ -34,12 +41,16 @@ func Open(root string) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	servers, err := cfg.LoadServers()
+	if err != nil {
+		return nil, err
+	}
 	wm := workspace.NewManager(root)
 	if _, err := wm.EnsureDefault(); err != nil {
 		return nil, err
 	}
 
-	c := &Core{cfg: cfg, workspaces: wm, settings: settings}
+	c := &Core{cfg: cfg, workspaces: wm, settings: settings, servers: servers}
 
 	start := settings.StartupWorkspace
 	if start == "" || !wm.Exists(start) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	_ "github.com/Solifugus/mcli/internal/adapters" // register default DB adapters
 	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/config"
 	"github.com/Solifugus/mcli/internal/tui"
