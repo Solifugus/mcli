@@ -10,12 +10,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 3 code-complete (Postgres adapter + `\connect`/`use`/`\list`/`\describe`/
-  SQL exec, async with Ctrl-C cancel, max_rows guardrail). Pending: live verification
-  against the user's real Postgres database.
-- **Next up:** (1) live-test against the user's DB (needs connection details), then
-  (2) optional ride-alongs — Chroma syntax highlighting + env-color prompt — or move
-  to Phase 4 (grid surface, SQL files, external editor).
+- **Phase:** 3 complete and live-verified against real Postgres. Ride-alongs done too:
+  syntax highlighting + env-color prompt. Phase 2 is now fully complete as well.
+- **Next up:** Phase 4 — alt-screen grid surface (`bubbles/table` + viewport, paging,
+  horizontal scroll), "open full result in grid" from a truncated inline result, SQL
+  file commands (`\files`/`\edit`/`\run`/`\cat`/`\copy`/`\rename`/`\delete`), and the
+  external `\edit` handoff via `tea.ExecProcess`. Bracketed-paste→`\edit` lands here too.
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -45,8 +45,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] `\enter` and workspace commands (§12), `\help`, `\quit`, scrollback via `tea.Println`
 - [x] `core` facade (`internal/core`) shared by both front-ends; `cmd/mcli` launches the TUI
 - [x] History ring (Up/Down) and Tab completion (commands + workspace names; files in Phase 4)
-- [ ] Chroma single-line syntax highlighting (dialect by connection) — deferred to Phase 3 (needs a dialect)
-- [ ] Prompt context + environment color (§18) — context done; env color deferred to Phase 3/7 (needs a connected server)
+- [x] Chroma single-line syntax highlighting (dialect by connection) — done with Phase 3
+- [x] Prompt context + environment color (§18) — done with Phase 3
 - [ ] Bracketed-paste routing (multi-line paste opens `\edit`) — deferred to Phase 4 (needs `\edit`)
 
 ## Phase 3 — First database adapter (pure Go)
@@ -58,8 +58,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Live verification against a real Postgres (PG 17.10, gbasic_site_dev): connect,
       list databases/tables, describe (PK detection), streaming query — all confirmed.
       Fixed `.pgpass` fallback for discrete params (build a keyword DSN, parse once)
-- [ ] Ride-alongs now unblocked: Chroma syntax highlighting (dialect available) and
-      env-color prompt (server environment available) — optional polish
+- [x] Ride-alongs: Chroma single-line syntax highlighting (dialect-aware, cursor
+      overlay, coalesced spans) and env-color prompt (§18: dev green / test·stage
+      yellow / prod red / unknown gray), gated by the `color_prompt` setting
 
 ## Phase 4 — Grid surface, SQL files, external editor
 - [ ] Alt-screen grid mode (`bubbles/table` + `viewport`, paging, horizontal scroll)

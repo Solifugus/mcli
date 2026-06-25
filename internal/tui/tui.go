@@ -14,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 
 	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/adapter"
 )
 
 type mode int
@@ -32,10 +33,15 @@ type Model struct {
 	width    int
 	quitting bool
 
-	// prompt is a snapshot of the context prompt. View renders this rather than
-	// reading Core, so the render path never races the background goroutine that
-	// mutates connection state. Refreshed at safe points on the UI thread.
-	prompt string
+	// Snapshots of Core state read at safe points on the UI thread. View renders
+	// from these rather than reading Core, so the render path never races the
+	// background goroutine that mutates connection state.
+	prompt    string          // context prompt text
+	promptEnv string          // environment label, drives prompt color (§18)
+	dialect   adapter.Dialect // active SQL dialect, drives syntax highlighting
+
+	// Color preferences from settings.
+	colorPrompt bool
 
 	// Background command state. While running, new submissions are refused and
 	// Ctrl-C cancels via cancel() instead of quitting.
@@ -54,15 +60,27 @@ func New(c *core.Core) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.SetVirtualCursor(true)
-	m := Model{core: c, mode: modeREPL, input: ti}
+	m := Model{core: c, mode: modeREPL, input: ti, colorPrompt: c.Settings().ColorPrompt}
 	m.refreshPrompt()
 	return m
 }
 
-// refreshPrompt snapshots the context prompt from Core. Call only on the UI
-// thread (New, after a sync command, on an async result) — never concurrently
-// with a running background command.
-func (m *Model) refreshPrompt() { m.prompt = m.promptString() }
+// refreshPrompt snapshots prompt-related Core state. Call only on the UI thread
+// (New, after a sync command, on an async result) — never concurrently with a
+// running background command.
+func (m *Model) refreshPrompt() {
+	m.prompt = m.promptString()
+	m.promptEnv = m.core.Environment()
+	m.dialect = m.core.Dialect()
+}
+
+// styledPrompt colors the prompt by environment when color is enabled.
+func (m Model) styledPrompt() string {
+	if !m.colorPrompt {
+		return m.prompt
+	}
+	return promptStyleFor(m.promptEnv).Render(m.prompt)
+}
 
 // Run launches the interactive program.
 func Run(c *core.Core) error {
@@ -236,7 +254,7 @@ func (m Model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
-	content := m.prompt + m.input.View()
+	content := m.styledPrompt() + renderInput(m.input.Value(), m.input.Position(), m.dialect, m.colorPrompt)
 	if m.running {
 		content = "running… (Ctrl-C to cancel)"
 	}

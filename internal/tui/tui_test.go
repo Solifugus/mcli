@@ -98,6 +98,7 @@ func TestUpKeyRecallsHistory(t *testing.T) {
 
 func TestViewRendersPromptLine(t *testing.T) {
 	m := newTestModel(t)
+	m.colorPrompt = false // plain output for a stable assertion
 	v := m.View()
 	if !strings.HasPrefix(v.Content, "default> ") {
 		t.Errorf("view content = %q, want prefix %q", v.Content, "default> ")

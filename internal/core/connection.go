@@ -21,8 +21,17 @@ func (c *Core) Servers() map[string]config.Server { return c.servers.Servers }
 func (c *Core) Connected() bool { return c.conn != nil }
 
 // ConnInfo reports the current connection's server name and dialect.
-func (c *Core) ConnServer() string         { return c.connServer }
-func (c *Core) Dialect() adapter.Dialect   { return c.dialect }
+func (c *Core) ConnServer() string       { return c.connServer }
+func (c *Core) Dialect() adapter.Dialect { return c.dialect }
+
+// Environment returns the environment label (dev/test/stage/prod/...) of the
+// connected server, or "" when not connected. It drives the prompt color (§18).
+func (c *Core) Environment() string {
+	if c.connServer == "" {
+		return ""
+	}
+	return c.servers.Servers[c.connServer].Environment
+}
 
 // Connect opens a connection to a configured server, resolving its password from
 // the configured source, and records the connection in the current workspace.
