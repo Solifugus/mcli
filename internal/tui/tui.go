@@ -112,6 +112,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	case asyncResultMsg:
 		return m.handleAsyncResult(msg)
+	case editDoneMsg:
+		m.refreshPrompt()
+		if msg.err != nil {
+			return m, tea.Println("editor error: " + msg.err.Error())
+		}
+		return m, tea.Println("edited " + msg.name)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -233,9 +239,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	m.addHistory(line)
-	res, run := m.handleLine(line)
-	for _, l := range res.lines {
-		cmds = append(cmds, tea.Println(l))
+	res, act := m.handleLine(line)
+	if len(res.lines) > 0 {
+		cmds = append(cmds, tea.Println(strings.Join(res.lines, "\n")))
 	}
 	if res.quit {
 		m.quitting = true
@@ -243,12 +249,17 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		return m, tea.Sequence(cmds...)
 	}
 
-	if run != nil {
+	switch {
+	case act.async != nil:
 		ctx, cancel := context.WithCancel(context.Background())
 		m.running = true
 		m.cancel = cancel
+		run := act.async
 		cmds = append(cmds, func() tea.Msg { return run(ctx) })
-	} else {
+	case act.cmd != nil:
+		// One-shot command such as the \edit editor handoff (no cancel spinner).
+		cmds = append(cmds, act.cmd)
+	default:
 		// A sync command may have changed the workspace; refresh the snapshot.
 		m.refreshPrompt()
 	}

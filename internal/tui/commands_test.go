@@ -48,31 +48,31 @@ func TestDispatchUnknownCommand(t *testing.T) {
 
 func TestBareInputIsAsyncSQL(t *testing.T) {
 	m := newTestModel(t)
-	res, run := m.handleLine("select 1")
-	if run == nil {
+	res, act := m.handleLine("select 1")
+	if act.async == nil {
 		t.Fatal("bare SQL should produce an async runner")
 	}
 	if len(res.lines) != 0 {
 		t.Errorf("unexpected immediate output: %v", res.lines)
 	}
 	// With no connection, executing the runner reports an error.
-	if msg := run(context.Background()); msg.err == nil {
+	if msg := act.async(context.Background()); msg.err == nil {
 		t.Error("running SQL with no connection should error")
 	}
 }
 
 func TestConnectUsageAndUnknownServer(t *testing.T) {
 	m := newTestModel(t)
-	// Missing argument is a synchronous usage error (nil runner).
-	if res, run := m.handleLine(`\connect`); run != nil || !strings.Contains(joinLines(res), "usage:") {
-		t.Errorf("connect usage: res=%q run=%v", joinLines(res), run != nil)
+	// Missing argument is a synchronous usage error (no runner).
+	if res, act := m.handleLine(`\connect`); act.async != nil || !strings.Contains(joinLines(res), "usage:") {
+		t.Errorf("connect usage: res=%q async=%v", joinLines(res), act.async != nil)
 	}
 	// Unknown server errors when the runner executes.
-	_, run := m.handleLine(`\connect ghost`)
-	if run == nil {
+	_, act := m.handleLine(`\connect ghost`)
+	if act.async == nil {
 		t.Fatal("expected a runner for \\connect <name>")
 	}
-	if msg := run(context.Background()); msg.err == nil {
+	if msg := act.async(context.Background()); msg.err == nil {
 		t.Error("connecting to unknown server should error")
 	}
 }
@@ -182,8 +182,8 @@ func TestConnectNoArgListsServers(t *testing.T) {
 	}})
 	c, _ := core.Open(root)
 	mm := New(c)
-	res, run := mm.handleLine(`\connect`)
-	if run != nil {
+	res, act := mm.handleLine(`\connect`)
+	if act.async != nil {
 		t.Error("bare \\connect should be synchronous")
 	}
 	got := joinLines(res)

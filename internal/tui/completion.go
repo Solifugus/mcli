@@ -5,8 +5,9 @@ import "strings"
 // replCommands are the commands offered by Tab completion. Aliases (\q, \exit)
 // still work but are intentionally not suggested.
 var replCommands = []string{
-	`\connect`, `\describe`, `\disconnect`, `\enter`, `\help`,
-	`\list`, `\quit`, `\server`, `\workspace`, "use",
+	`\cat`, `\connect`, `\copy`, `\delete`, `\describe`, `\disconnect`,
+	`\edit`, `\enter`, `\files`, `\help`, `\list`, `\quit`, `\rename`,
+	`\run`, `\server`, `\workspace`, "use",
 }
 
 // workspaceSubcommands are the second-token completions for \workspace.
@@ -96,8 +97,24 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 		if tokenIndex == 1 {
 			return listTargets
 		}
+	case `\edit`, `\run`, `\cat`, `\delete`:
+		if tokenIndex == 1 {
+			return m.sqlFileNames()
+		}
+	case `\copy`, `\rename`:
+		if tokenIndex == 1 { // complete the source file; the destination is new
+			return m.sqlFileNames()
+		}
 	}
 	return nil
+}
+
+func (m *Model) sqlFileNames() []string {
+	files, err := m.core.ListSQLFiles()
+	if err != nil {
+		return nil
+	}
+	return files
 }
 
 func (m *Model) serverNames() []string {

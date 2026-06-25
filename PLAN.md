@@ -10,12 +10,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 3 complete and live-verified against real Postgres. Ride-alongs done too:
-  syntax highlighting + env-color prompt. Phase 2 is now fully complete as well.
-- **Next up:** Phase 4 — alt-screen grid surface (`bubbles/table` + viewport, paging,
-  horizontal scroll), "open full result in grid" from a truncated inline result, SQL
-  file commands (`\files`/`\edit`/`\run`/`\cat`/`\copy`/`\rename`/`\delete`), and the
-  external `\edit` handoff via `tea.ExecProcess`. Bracketed-paste→`\edit` lands here too.
+- **Phase:** 4 in progress. SQL file commands + external `\edit` handoff done and
+  verified (incl. editor suspend/resume). Remaining: the alt-screen grid viewer,
+  "open full result in grid", and bracketed-paste→`\edit` routing.
+- **Next up:** the grid surface — alt-screen mode (`bubbles/table` + viewport, paging,
+  horizontal scroll, Esc/q to return) and wiring a truncated inline result to open in it.
 - **Last updated:** 2026-06-24
 - **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
   auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
@@ -63,10 +62,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
       yellow / prod red / unknown gray), gated by the `color_prompt` setting
 
 ## Phase 4 — Grid surface, SQL files, external editor
+- [x] `\files`, `\edit` (external editor via `tea.ExecProcess`, resolution order §11), `\run`, `\cat`, `\copy`, `\rename`, `\delete` — verified incl. editor suspend/resume
+- [x] Log file operations to history (WRITE/EDIT/COPY/RENAME/DELETE)
+- [x] Tab completion for file commands; multi-line-paste→`\edit` still pending (needs grid? no — paste routing, can do anytime)
 - [ ] Alt-screen grid mode (`bubbles/table` + `viewport`, paging, horizontal scroll)
 - [ ] "Open full result in grid" from a truncated inline result
-- [ ] `\files`, `\edit` (external editor via `tea.ExecProcess`, resolution order §11), `\run`, `\cat`, `\copy`, `\rename`, `\delete`
-- [ ] Log file operations to history
+- [ ] Bracketed-paste routing (multi-line paste opens `\edit`)
 
 ## Phase 5 — Import / export (`internal/core/transfer`)
 - [ ] CSV export, then CSV import

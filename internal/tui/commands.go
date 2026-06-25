@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/Solifugus/mcli/internal/core/config"
 )
 
@@ -20,41 +22,128 @@ func out(lines ...string) cmdResult      { return cmdResult{lines: lines} }
 func errOut(err error) cmdResult         { return cmdResult{lines: []string{"error: " + err.Error()}} }
 func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); return r }
 
-// handleLine interprets a non-empty submitted line. It returns the immediate
-// output (cmdResult) and, for commands that perform I/O, a background runner.
-// Exactly one of the two carries the work: sync commands return a nil runner;
-// async commands return an empty cmdResult plus a runner (or a usage/error
-// cmdResult and a nil runner when their arguments are invalid).
-func (m *Model) handleLine(line string) (cmdResult, asyncRun) {
+// action is what submit should do after a command's immediate output. At most
+// one field is set: async for a cancellable background DB op, cmd for a one-shot
+// command (e.g. the \edit editor handoff), neither for a purely synchronous
+// command.
+type action struct {
+	async asyncRun
+	cmd   tea.Cmd
+}
+
+func sync() action               { return action{} }
+func async(r asyncRun) action    { return action{async: r} }
+func runCmd(c tea.Cmd) action    { return action{cmd: c} }
+
+// handleLine interprets a non-empty submitted line, returning the immediate
+// output and an action describing any follow-up work.
+func (m *Model) handleLine(line string) (cmdResult, action) {
 	cmd, args := tokenize(line)
 	switch cmd {
 	case `\quit`, `\q`, `\exit`:
-		return cmdResult{quit: true}, nil
+		return cmdResult{quit: true}, sync()
 	case `\help`:
-		return helpText(), nil
+		return helpText(), sync()
 	case `\workspace`:
-		return m.cmdWorkspace(args), nil
+		return m.cmdWorkspace(args), sync()
 	case `\enter`:
-		return m.cmdEnter(args), nil
+		return m.cmdEnter(args), sync()
 	case `\server`:
-		return m.cmdServer(args), nil
+		return m.cmdServer(args), sync()
 	case `\connect`:
-		return m.cmdConnect(args)
+		res, run := m.cmdConnect(args)
+		return res, async(run)
 	case `\disconnect`:
-		return m.cmdDisconnect(), nil
+		return m.cmdDisconnect(), sync()
 	case `\list`:
-		return m.cmdList(args)
+		res, run := m.cmdList(args)
+		return res, async(run)
 	case `\describe`:
-		return m.cmdDescribe(args)
+		res, run := m.cmdDescribe(args)
+		return res, async(run)
 	case "use":
-		return m.cmdUse(args)
+		res, run := m.cmdUse(args)
+		return res, async(run)
+	case `\files`:
+		return m.cmdFiles(), sync()
+	case `\cat`:
+		return m.cmdCat(args), sync()
+	case `\copy`:
+		return m.cmdCopy(args), sync()
+	case `\rename`:
+		return m.cmdRenameFile(args), sync()
+	case `\delete`:
+		return m.cmdDeleteFile(args), sync()
+	case `\edit`:
+		res, c := m.cmdEdit(args)
+		return res, runCmd(c)
+	case `\run`:
+		res, run := m.cmdRun(args)
+		return res, async(run)
 	default:
 		if strings.HasPrefix(cmd, `\`) {
-			return out("unknown command: " + cmd + " (try \\help)"), nil
+			return out("unknown command: " + cmd + " (try \\help)"), sync()
 		}
 		// Bare input is SQL, run against the live connection.
-		return cmdResult{}, m.sqlRunner(line)
+		return cmdResult{}, async(m.sqlRunner(line))
 	}
+}
+
+// --- SQL file commands (§15) ---
+
+func (m *Model) cmdFiles() cmdResult {
+	files, err := m.core.ListSQLFiles()
+	if err != nil {
+		return errOut(err)
+	}
+	if len(files) == 0 {
+		return out("no SQL files in this workspace")
+	}
+	return cmdResult{lines: files}
+}
+
+func (m *Model) cmdCat(args []string) cmdResult {
+	if len(args) < 1 {
+		return out(`usage: \cat <name>`)
+	}
+	content, err := m.core.ReadSQLFile(args[0])
+	if err != nil {
+		return errOut(err)
+	}
+	if content == "" {
+		return out("(empty file)")
+	}
+	return cmdResult{lines: strings.Split(strings.TrimRight(content, "\n"), "\n")}
+}
+
+func (m *Model) cmdCopy(args []string) cmdResult {
+	if len(args) < 2 {
+		return out(`usage: \copy <old> <new>`)
+	}
+	if err := m.core.CopySQLFile(args[0], args[1]); err != nil {
+		return errOut(err)
+	}
+	return out("copied " + args[0] + " to " + args[1])
+}
+
+func (m *Model) cmdRenameFile(args []string) cmdResult {
+	if len(args) < 2 {
+		return out(`usage: \rename <old> <new>`)
+	}
+	if err := m.core.RenameSQLFile(args[0], args[1]); err != nil {
+		return errOut(err)
+	}
+	return out("renamed " + args[0] + " to " + args[1])
+}
+
+func (m *Model) cmdDeleteFile(args []string) cmdResult {
+	if len(args) < 1 {
+		return out(`usage: \delete <name>`)
+	}
+	if err := m.core.DeleteSQLFile(args[0]); err != nil {
+		return errOut(err)
+	}
+	return out("deleted " + args[0])
 }
 
 // cmdDisconnect closes the connection. It is synchronous: closing is quick and
@@ -233,6 +322,12 @@ func helpText() cmdResult {
 		`  \list databases|schemas|tables|views          list objects`,
 		`  \describe <table>                             show columns`,
 		`  <sql>                                         run SQL on the connection`,
+		`  \files                                        list workspace SQL files`,
+		`  \edit <name>                                  edit a SQL file ($EDITOR)`,
+		`  \run <name>                                   run a SQL file`,
+		`  \cat <name>                                   print a SQL file`,
+		`  \copy <old> <new> / \rename <old> <new>       copy or rename a file`,
+		`  \delete <name>                                delete a SQL file`,
 		`  \help                                         this help`,
 		`  \quit                                         exit (also Ctrl-C / Ctrl-D)`,
 		``,

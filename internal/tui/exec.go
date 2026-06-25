@@ -100,6 +100,22 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 	}
 }
 
+// cmdRun executes a workspace SQL file against the live connection, reusing the
+// bare-SQL runner. Multi-statement files are a future enhancement.
+func (m *Model) cmdRun(args []string) (cmdResult, asyncRun) {
+	if len(args) < 1 {
+		return out(`usage: \run <name>`), nil
+	}
+	content, err := m.core.ReadSQLFile(args[0])
+	if err != nil {
+		return errOut(err), nil
+	}
+	if strings.TrimSpace(content) == "" {
+		return out("file " + args[0] + " is empty"), nil
+	}
+	return cmdResult{}, m.sqlRunner(content)
+}
+
 // sqlRunner runs bare SQL: row-returning statements stream into an aligned table
 // capped at max_rows_default; everything else reports rows affected.
 func (m *Model) sqlRunner(sql string) asyncRun {
