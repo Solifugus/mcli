@@ -43,27 +43,53 @@ func (a *Adapter) Connect(ctx context.Context, p adapter.ConnectParams) error {
 }
 
 func buildConfig(p adapter.ConnectParams) (*pgx.ConnConfig, error) {
-	base := p.ConnectionString
-	cfg, err := pgx.ParseConfig(base)
+	// Build the full connection string up front and parse once. pgx resolves
+	// ~/.pgpass during ParseConfig against the final host/port/db/user, so the
+	// fields must be present in the string — mutating the config afterward would
+	// skip the passfile lookup (a password left empty would fail to fall back).
+	connStr := p.ConnectionString
+	if connStr == "" {
+		connStr = discreteDSN(p)
+	}
+	cfg, err := pgx.ParseConfig(connStr)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: parse config: %w", err)
 	}
-	if p.ConnectionString == "" {
-		if p.Host != "" {
-			cfg.Host = p.Host
-		}
-		if p.Port != 0 {
-			cfg.Port = uint16(p.Port)
-		}
-		if p.User != "" {
-			cfg.User = p.User
-		}
-		cfg.Password = p.Password
-		if p.Database != "" {
-			cfg.Database = p.Database
+	return cfg, nil
+}
+
+// discreteDSN assembles a libpq keyword/value DSN from discrete params, quoting
+// values as needed. An empty password is intentionally omitted so that pgx falls
+// back to ~/.pgpass (or other auth) rather than sending an empty password.
+func discreteDSN(p adapter.ConnectParams) string {
+	var parts []string
+	add := func(k, v string) {
+		if v != "" {
+			parts = append(parts, k+"="+kvQuote(v))
 		}
 	}
-	return cfg, nil
+	add("host", p.Host)
+	if p.Port != 0 {
+		parts = append(parts, fmt.Sprintf("port=%d", p.Port))
+	}
+	add("user", p.User)
+	add("password", p.Password)
+	add("dbname", p.Database)
+	for k, v := range p.Params {
+		add(k, v)
+	}
+	return strings.Join(parts, " ")
+}
+
+// kvQuote quotes a libpq keyword/value DSN value when it contains a space,
+// single quote, or backslash; other values pass through unchanged.
+func kvQuote(s string) string {
+	if !strings.ContainsAny(s, ` '\`) {
+		return s
+	}
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	return "'" + s + "'"
 }
 
 // Disconnect closes the connection.

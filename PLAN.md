@@ -55,7 +55,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] `\connect` / `use` / `\list` / `\describe` / bare-SQL execution (§13–14)
 - [x] Queries run as `tea.Cmd` with `context` cancel on Ctrl-C (prompt snapshot avoids races)
 - [x] `max_rows_default` guardrail + aligned inline result table
-- [ ] Live verification against a real Postgres (pending connection details from user)
+- [x] Live verification against a real Postgres (PG 17.10, gbasic_site_dev): connect,
+      list databases/tables, describe (PK detection), streaming query — all confirmed.
+      Fixed `.pgpass` fallback for discrete params (build a keyword DSN, parse once)
 - [ ] Ride-alongs now unblocked: Chroma syntax highlighting (dialect available) and
       env-color prompt (server environment available) — optional polish
 

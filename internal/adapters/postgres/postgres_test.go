@@ -61,6 +61,43 @@ func TestBuildConfigConnString(t *testing.T) {
 	}
 }
 
+func TestKVQuote(t *testing.T) {
+	cases := map[string]string{
+		"simple":      "simple",
+		"Donkey1!":    "Donkey1!",          // no space/quote/backslash -> unquoted
+		"has space":   "'has space'",
+		`back\slash`:  `'back\\slash'`,
+		`quote'd`:     `'quote\'d'`,
+	}
+	for in, want := range cases {
+		if got := kvQuote(in); got != want {
+			t.Errorf("kvQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDiscreteDSNOmitsEmptyPassword(t *testing.T) {
+	// With no password, the DSN must not carry "password=" so pgx can fall back
+	// to ~/.pgpass.
+	dsn := discreteDSN(adapter.ConnectParams{Host: "h", Port: 5432, User: "u", Database: "d"})
+	if contains(dsn, "password=") {
+		t.Errorf("DSN should omit empty password: %q", dsn)
+	}
+	withPw := discreteDSN(adapter.ConnectParams{Host: "h", User: "u", Password: "p"})
+	if !contains(withPw, "password=p") {
+		t.Errorf("DSN should include password: %q", withPw)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDisconnectWhenNotConnected(t *testing.T) {
 	if err := (&Adapter{}).Disconnect(); err != nil {
 		t.Errorf("Disconnect on fresh adapter = %v, want nil", err)
