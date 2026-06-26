@@ -51,6 +51,11 @@ type Model struct {
 	grid       gridModel
 	lastResult *resultSet
 
+	// lastSQL/lastSQLErr track the most recent statement and any error it
+	// produced, so \ai explain current / \ai fix current have something to act on.
+	lastSQL    string
+	lastSQLErr string
+
 	// Snapshots of Core state read at safe points on the UI thread. View renders
 	// from these rather than reading Core, so the render path never races the
 	// background goroutine that mutates connection state.
@@ -278,6 +283,13 @@ func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
 
 	if msg.result != nil {
 		m.lastResult = msg.result
+	}
+	if msg.isSQL { // record the outcome so \ai fix current can use the error
+		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+			m.lastSQLErr = msg.err.Error()
+		} else {
+			m.lastSQLErr = ""
+		}
 	}
 
 	var lines []string

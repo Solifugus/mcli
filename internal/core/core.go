@@ -7,6 +7,7 @@ package core
 import (
 	"fmt"
 
+	"github.com/Solifugus/mcli/internal/ai"
 	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/config"
 	"github.com/Solifugus/mcli/internal/core/history"
@@ -19,6 +20,8 @@ type Core struct {
 	workspaces *workspace.Manager
 	settings   config.Settings
 	servers    config.ServersConfig
+	aiCfg      config.AIConfig
+	aiClient   *ai.Client
 
 	current workspace.Workspace
 	hist    *history.Log
@@ -49,12 +52,19 @@ func Open(root string) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	aiCfg, err := cfg.LoadAI()
+	if err != nil {
+		return nil, err
+	}
 	wm := workspace.NewManager(root)
 	if _, err := wm.EnsureDefault(); err != nil {
 		return nil, err
 	}
 
-	c := &Core{cfg: cfg, workspaces: wm, settings: settings, servers: servers, readOnly: settings.ReadOnly}
+	c := &Core{
+		cfg: cfg, workspaces: wm, settings: settings, servers: servers,
+		aiCfg: aiCfg, aiClient: ai.New(), readOnly: settings.ReadOnly,
+	}
 
 	start := settings.StartupWorkspace
 	if start == "" || !wm.Exists(start) {

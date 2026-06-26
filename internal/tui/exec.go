@@ -21,6 +21,7 @@ type asyncResultMsg struct {
 	err      error
 	result   *resultSet // non-nil for row-returning queries; openable in the grid
 	pwPrompt *pwReq     // set when the op needs an interactive password to proceed
+	isSQL    bool       // produced by the SQL runner (drives lastSQLErr tracking)
 }
 
 // pwReq asks the front-end to collect a password (masked) and then run the work
@@ -297,6 +298,7 @@ func (m *Model) cmdRun(args []string) (cmdResult, action) {
 // prompt, and Allow runs it as an ordinary background op. Every SQL entry point
 // (bare line and \run) funnels through here so the guard cannot be bypassed.
 func (m *Model) guardedSQL(sql string) (cmdResult, action) {
+	m.lastSQL = sql // remember for \ai explain/fix current
 	runner := m.sqlRunner(sql)
 	switch act, _, reason := m.core.GuardStatement(sql); act {
 	case safety.Block:
@@ -313,7 +315,8 @@ func (m *Model) guardedSQL(sql string) (cmdResult, action) {
 func (m *Model) sqlRunner(sql string) asyncRun {
 	c := m.core
 	maxRows := m.core.Settings().MaxRowsDefault
-	return func(ctx context.Context) asyncResultMsg {
+	return func(ctx context.Context) (res asyncResultMsg) {
+		defer func() { res.isSQL = true }() // tag every exit so lastSQLErr tracks SQL
 		if !isQuery(sql) {
 			res, err := c.RunStatement(ctx, sql)
 			if err != nil {

@@ -94,6 +94,8 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 		return m.cmdRun(args)
 	case `\readonly`:
 		return m.cmdReadonly(args), sync()
+	case `\ai`:
+		return m.cmdAI(args)
 	case `\grid`:
 		return cmdResult{}, gridAction()
 	case `\export`:
@@ -531,6 +533,7 @@ func helpText() cmdResult {
 		`  \describe <table>                             show columns`,
 		`  <sql>                                         run SQL on the connection`,
 		`  \readonly [on|off]                            show or toggle read-only guard`,
+		`  \ai ask <q>|explain <f|current>|fix <f|current>|providers   ask the AI assistant`,
 		`  \grid                                         open the last result in a scrollable grid`,
 		`  \export query <name>|table <name>|current to <path> [exact]   export to CSV/TSV/pipe/xlsx/fixed`,
 		`  \import <path> [sheet <name>|widths N,N,...] into <table>   load a delimited/xlsx/fixed file`,

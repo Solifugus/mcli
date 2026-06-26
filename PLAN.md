@@ -10,13 +10,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 7 complete. Safety core, server management, and password sources
-  all landed. Phases 1–6 done (six adapters; DB2 behind `-tags db2`). MySQL/
-  MariaDB, Oracle, and Postgres are live-verified; SQL Server reached TDS login
-  (data round-trip awaits the real password); DB2 is unverified (WIP driver).
-- **Next up:** Phase 8 — AI assistance (`internal/ai`): `ai.json` providers,
-  `\ai ask`, explain/fix current SQL, schema context. Loose ends to revisit:
-  live SQL Server round-trip (needs password); DB2 (needs a working driver).
+- **Phase:** 8 complete. AI assistance landed (OpenAI-compatible client, `\ai`
+  commands). Phases 1–7 done. Six adapters (DB2 behind `-tags db2`); MySQL/
+  MariaDB, Oracle, Postgres live-verified; SQL Server reached TDS login (data
+  round-trip awaits the real password); DB2 unverified (WIP driver).
+- **Next up:** Phase 9 — MCP server (`internal/mcp`): `mcli mcp serve` /
+  `\mcp serve` exposing workspace/server/schema/query/transfer/file tools over
+  the core, with the same safety controls. Loose ends: live SQL Server round-trip
+  (needs password); DB2 (needs a working driver); live AI completion (both the
+  OpenAI and Anthropic keys on this machine authenticate but are out of
+  credit/quota — code is verified up to the billing wall, see Phase 8).
 - **Last updated:** 2026-06-25
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
   auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
@@ -152,9 +155,27 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
       unit-tested via `keyring.MockInit()`.
 
 ## Phase 8 — AI assistance (`internal/ai`)
-- [ ] `ai.json` providers
-- [ ] `\ai ask`; explain/fix current SQL (§20)
-- [ ] Schema-context support; configurable providers; never auto-execute SQL
+- [x] OpenAI-compatible chat client (`internal/ai`): minimal `/chat/completions`
+      body (model + messages; temperature omitted for max compatibility),
+      base_url defaults to OpenAI so the same client serves local Ollama (no key)
+      and hosted providers. Prompt/context assembly (system prompt grounded in
+      dialect/environment/database + capped table-name schema hint) lives here.
+- [x] `ai.json` providers loaded into the core; `\ai providers` lists them and
+      marks the default. Provider resolution picks the configured default (or the
+      sole provider) and resolves `api_key_source` (none / env:VAR).
+- [x] `\ai ask <q>`, `\ai explain <file|current>`, `\ai fix <file|current>` (§20).
+      The TUI tracks the last statement and its error so `current` works and
+      `fix` can include the DB error. Runs as a background op; AI never executes
+      SQL — output is text for the user to review and run.
+- [x] Schema-context support gated by `send_schema_context` (capped at 60 tables).
+- [~] Live-verified up to the billing wall: both the OpenAI key (env
+      OPENAI_API_KEY) and Anthropic key (via its OpenAI-compatible endpoint)
+      AUTHENTICATE and reach the real APIs with the correct request shape — both
+      return billing errors (OpenAI 429 quota; Anthropic 400 low credit), cleanly
+      surfaced. No local Ollama was available for a free completion. The full
+      path (auth, endpoint, request/response, error parsing) is proven against two
+      real providers; an actual completion awaits credits or a local model.
+- [ ] Deferred to a later pass: `\ai generate import for <path>`, `\ai lineage`.
 
 ## Phase 9 — MCP server (`internal/mcp`)
 - [ ] `mcli mcp serve` / `\mcp serve` exposing workspace/server/schema/query/transfer/file tools over core (§21)

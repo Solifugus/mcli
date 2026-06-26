@@ -5,10 +5,13 @@ import "strings"
 // replCommands are the commands offered by Tab completion. Aliases (\q, \exit)
 // still work but are intentionally not suggested.
 var replCommands = []string{
-	`\cat`, `\connect`, `\copy`, `\delete`, `\describe`, `\disconnect`,
+	`\ai`, `\cat`, `\connect`, `\copy`, `\delete`, `\describe`, `\disconnect`,
 	`\edit`, `\enter`, `\export`, `\files`, `\grid`, `\help`, `\import`,
-	`\list`, `\quit`, `\rename`, `\run`, `\server`, `\workspace`, "use",
+	`\list`, `\readonly`, `\run`, `\quit`, `\rename`, `\server`, `\workspace`, "use",
 }
+
+// aiSubcommands are the second-token completions for \ai.
+var aiSubcommands = []string{"ask", "explain", "fix", "providers"}
 
 // workspaceSubcommands are the second-token completions for \workspace.
 var workspaceSubcommands = []string{"create", "delete", "list", "rename", "status"}
@@ -95,6 +98,13 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 			case "show", "edit", "remove", "rm", "delete", "test", "set-password", "clear-password":
 				return m.serverNames()
 			}
+		}
+	case `\ai`:
+		if tokenIndex == 1 {
+			return aiSubcommands
+		}
+		if tokenIndex == 2 && (subcommand == "explain" || subcommand == "fix") {
+			return append([]string{"current"}, m.sqlFileNames()...)
 		}
 	case `\list`:
 		if tokenIndex == 1 {
