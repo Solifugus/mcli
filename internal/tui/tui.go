@@ -258,6 +258,24 @@ func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
 	m.running = false
 	m.cancel = nil
 	m.refreshPrompt() // connection/database may have changed
+
+	// A background op may need a password to continue: prompt (masked) and run
+	// the deferred work with what the user types.
+	if msg.pwPrompt != nil {
+		req := msg.pwPrompt
+		m.startPrompt(pending{
+			label: req.label,
+			mask:  true,
+			resume: func(m *Model, text string, canceled bool) tea.Cmd {
+				if canceled {
+					return tea.Println("canceled")
+				}
+				return m.launchAsync(req.run(text))
+			},
+		})
+		return m, nil
+	}
+
 	if msg.result != nil {
 		m.lastResult = msg.result
 	}

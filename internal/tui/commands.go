@@ -2,12 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/config"
 )
 
@@ -63,8 +65,7 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `\server`:
 		return m.cmdServer(args)
 	case `\connect`:
-		res, run := m.cmdConnect(args)
-		return res, async(run)
+		return m.cmdConnect(args)
 	case `\disconnect`:
 		return m.cmdDisconnect(), sync()
 	case `\list`:
@@ -232,8 +233,12 @@ func (m *Model) cmdServer(args []string) (cmdResult, action) {
 		return m.serverRemove(args[1:]), sync()
 	case "test":
 		return m.serverTest(args[1:])
+	case "set-password", "passwd", "password":
+		return m.serverSetPassword(args[1:])
+	case "clear-password":
+		return m.serverClearPassword(args[1:]), sync()
 	default:
-		return out(`usage: \server list|show|add|edit|remove|test`), sync()
+		return out(`usage: \server list|show|add|edit|remove|test|set-password|clear-password`), sync()
 	}
 }
 
@@ -329,19 +334,75 @@ func (m *Model) serverRemove(rest []string) cmdResult {
 	return out("removed server " + name)
 }
 
-// serverTest connects to a server in the background and reports reachability.
+// serverTest connects to a server in the background and reports reachability,
+// prompting for a password if the source requires it.
 func (m *Model) serverTest(rest []string) (cmdResult, action) {
 	if len(rest) < 1 {
 		return out(`usage: \server test <name>`), sync()
 	}
 	name := rest[0]
 	c := m.core
+	ok := []string{name + ": connection OK"}
 	return cmdResult{}, async(func(ctx context.Context) asyncResultMsg {
-		if err := c.TestServer(ctx, name); err != nil {
+		switch err := c.TestServer(ctx, name); {
+		case err == nil:
+			return asyncResultMsg{lines: ok}
+		case errors.Is(err, core.ErrPasswordRequired):
+			return asyncResultMsg{pwPrompt: &pwReq{
+				label: "password for " + name + ": ",
+				run: func(pw string) asyncRun {
+					return func(ctx context.Context) asyncResultMsg {
+						if err := c.TestServerWith(ctx, name, pw); err != nil {
+							return asyncResultMsg{err: fmt.Errorf("%s: %w", name, err)}
+						}
+						return asyncResultMsg{lines: ok}
+					}
+				},
+			}}
+		default:
 			return asyncResultMsg{err: fmt.Errorf("%s: %w", name, err)}
 		}
-		return asyncResultMsg{lines: []string{name + ": connection OK"}}
 	})
+}
+
+// serverSetPassword prompts (masked) for a secret and stores it in the OS
+// keyring under the server name. Pair with password_source "keyring".
+func (m *Model) serverSetPassword(rest []string) (cmdResult, action) {
+	if len(rest) < 1 {
+		return out(`usage: \server set-password <name>`), sync()
+	}
+	name := rest[0]
+	if _, ok := m.core.Server(name); !ok {
+		return out("no server named " + name), sync()
+	}
+	c := m.core
+	p := &pending{
+		label: "keyring password for " + name + ": ",
+		mask:  true,
+		resume: func(m *Model, text string, canceled bool) tea.Cmd {
+			if canceled {
+				return tea.Println("canceled")
+			}
+			return m.launchAsync(func(ctx context.Context) asyncResultMsg {
+				if err := c.SetServerPassword(name, text); err != nil {
+					return asyncResultMsg{err: err}
+				}
+				return asyncResultMsg{lines: []string{"stored keyring secret for " + name + " (set its password_source to keyring to use it)"}}
+			})
+		},
+	}
+	return out("setting keyring password for " + name + " (Esc cancels)"), action{prompt: p}
+}
+
+// serverClearPassword removes a server's keyring secret.
+func (m *Model) serverClearPassword(rest []string) cmdResult {
+	if len(rest) < 1 {
+		return out(`usage: \server clear-password <name>`)
+	}
+	if err := m.core.DeleteServerPassword(rest[0]); err != nil {
+		return errOut(err)
+	}
+	return out("cleared keyring secret for " + rest[0])
 }
 
 // serverTarget renders a one-line connection target for the server list.
@@ -462,6 +523,7 @@ func helpText() cmdResult {
 		`  \workspace list|create|rename|delete|status   manage workspaces`,
 		`  \enter <name>                                 switch workspace`,
 		`  \server list|show|add|edit|remove|test        manage configured servers`,
+		`  \server set-password|clear-password <name>    store/remove a keyring secret`,
 		`  \connect <server>                             connect to a configured server`,
 		`  \disconnect                                   close the connection`,
 		`  use <database>                                switch current database`,

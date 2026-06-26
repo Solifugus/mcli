@@ -34,16 +34,12 @@ func (c *Core) Environment() string {
 	return c.servers.Servers[c.connServer].Environment
 }
 
-// dialAdapter resolves a server's password, builds a fresh adapter, and connects
-// it — without touching the Core's live connection or the workspace. Both
-// Connect (which then adopts the adapter) and TestServer (which discards it)
-// share it so connection wiring lives in exactly one place.
-func (c *Core) dialAdapter(ctx context.Context, srv config.Server) (adapter.Adapter, error) {
+// dialAdapter builds a fresh adapter and connects it with an explicit password —
+// without touching the Core's live connection or the workspace. Both Connect
+// (which adopts the adapter) and TestServer (which discards it) share it so
+// connection wiring lives in exactly one place.
+func (c *Core) dialAdapter(ctx context.Context, srv config.Server, password string) (adapter.Adapter, error) {
 	ad, err := adapter.New(srv.Type)
-	if err != nil {
-		return nil, err
-	}
-	password, err := resolvePassword(srv)
 	if err != nil {
 		return nil, err
 	}
@@ -63,13 +59,36 @@ func (c *Core) dialAdapter(ctx context.Context, srv config.Server) (adapter.Adap
 }
 
 // Connect opens a connection to a configured server, resolving its password from
-// the configured source, and records the connection in the current workspace.
+// the configured source. If the source needs interactive entry (prompt, or a
+// keyring miss), it returns ErrPasswordRequired so a front-end can prompt and
+// retry via ConnectWithPassword.
 func (c *Core) Connect(ctx context.Context, name string) error {
 	srv, ok := c.servers.Servers[name]
 	if !ok {
 		return fmt.Errorf("no server named %q (see \\server list)", name)
 	}
-	ad, err := c.dialAdapter(ctx, srv)
+	password, err := resolvePassword(name, srv)
+	if err != nil {
+		return err
+	}
+	return c.adopt(ctx, name, srv, password)
+}
+
+// ConnectWithPassword connects using an explicitly supplied password, bypassing
+// the configured source. Front-ends call it after prompting in response to
+// ErrPasswordRequired.
+func (c *Core) ConnectWithPassword(ctx context.Context, name, password string) error {
+	srv, ok := c.servers.Servers[name]
+	if !ok {
+		return fmt.Errorf("no server named %q (see \\server list)", name)
+	}
+	return c.adopt(ctx, name, srv, password)
+}
+
+// adopt dials the server with the given password and, on success, makes it the
+// live connection and records it in the current workspace.
+func (c *Core) adopt(ctx context.Context, name string, srv config.Server, password string) error {
+	ad, err := c.dialAdapter(ctx, srv, password)
 	if err != nil {
 		return err
 	}
@@ -190,10 +209,15 @@ func (c *Core) RunStatement(ctx context.Context, sql string) (adapter.Result, er
 	return res, err
 }
 
-// resolvePassword obtains a server's password from its configured source.
-// Supported now: empty/"none" (no password) and "env:VAR". "prompt" and
-// "keyring" arrive with secret handling in Phase 7.
-func resolvePassword(srv config.Server) (string, error) {
+// resolvePassword obtains a server's password from its configured source:
+//   - "" / "none": no password.
+//   - "env:VAR":   the named environment variable.
+//   - "keyring":   the OS keyring entry for this server; a miss or an
+//     unavailable keyring yields ErrPasswordRequired (prompt fallback, §7).
+//   - "prompt":    always ErrPasswordRequired — the front-end must ask.
+//
+// server is the server name, used as the keyring account key.
+func resolvePassword(server string, srv config.Server) (string, error) {
 	src := srv.PasswordSource
 	switch {
 	case src == "" || src == "none":
@@ -205,9 +229,12 @@ func resolvePassword(srv config.Server) (string, error) {
 		}
 		return os.Getenv(name), nil
 	case src == "prompt":
-		return "", errors.New(`password_source "prompt" is not supported yet; use env:VAR`)
+		return "", ErrPasswordRequired
 	case src == "keyring":
-		return "", errors.New(`password_source "keyring" arrives in Phase 7; use env:VAR`)
+		if secret, ok := keyringGet(server); ok {
+			return secret, nil
+		}
+		return "", ErrPasswordRequired
 	default:
 		return "", fmt.Errorf("unknown password_source %q", src)
 	}

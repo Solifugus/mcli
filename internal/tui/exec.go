@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/safety"
 )
@@ -16,9 +17,20 @@ var errNoCurrentResult = errors.New("no current result — run a query first")
 // asyncResultMsg is delivered when a background command (connect, query, schema
 // introspection) finishes. Output is pre-formatted into lines off the UI thread.
 type asyncResultMsg struct {
-	lines  []string
-	err    error
-	result *resultSet // non-nil for row-returning queries; openable in the grid
+	lines    []string
+	err      error
+	result   *resultSet // non-nil for row-returning queries; openable in the grid
+	pwPrompt *pwReq     // set when the op needs an interactive password to proceed
+}
+
+// pwReq asks the front-end to collect a password (masked) and then run the work
+// that needs it. It is how connect/test recover from ErrPasswordRequired: the
+// background op returns one of these, the UI prompts, and run(pw) is launched as
+// the next background op. Keeping keyring access in the background op (not on the
+// UI thread) means a slow Secret Service call never blocks rendering.
+type pwReq struct {
+	label string
+	run   func(pw string) asyncRun
 }
 
 // asyncRun is a unit of background work returning a result message. It receives a
@@ -27,22 +39,37 @@ type asyncRun func(ctx context.Context) asyncResultMsg
 
 // --- async command builders ---
 
-func (m *Model) cmdConnect(args []string) (cmdResult, asyncRun) {
+func (m *Model) cmdConnect(args []string) (cmdResult, action) {
 	if len(args) < 1 {
 		names := sortedServerNames(m.core.Servers())
 		if len(names) == 0 {
-			return out(`usage: \connect <server> — no servers configured (see \server list)`), nil
+			return out(`usage: \connect <server> — no servers configured (\server add)`), sync()
 		}
-		return out(`usage: \connect <server>`, "available: "+strings.Join(names, ", ")), nil
+		return out(`usage: \connect <server>`, "available: "+strings.Join(names, ", ")), sync()
 	}
 	name := args[0]
 	c := m.core
-	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
-		if err := c.Connect(ctx, name); err != nil {
+	connected := []string{"connected to " + name}
+	return cmdResult{}, async(func(ctx context.Context) asyncResultMsg {
+		switch err := c.Connect(ctx, name); {
+		case err == nil:
+			return asyncResultMsg{lines: connected}
+		case errors.Is(err, core.ErrPasswordRequired):
+			return asyncResultMsg{pwPrompt: &pwReq{
+				label: "password for " + name + ": ",
+				run: func(pw string) asyncRun {
+					return func(ctx context.Context) asyncResultMsg {
+						if err := c.ConnectWithPassword(ctx, name, pw); err != nil {
+							return asyncResultMsg{err: err}
+						}
+						return asyncResultMsg{lines: connected}
+					}
+				},
+			}}
+		default:
 			return asyncResultMsg{err: err}
 		}
-		return asyncResultMsg{lines: []string{"connected to " + name}}
-	}
+	})
 }
 
 func (m *Model) cmdUse(args []string) (cmdResult, asyncRun) {

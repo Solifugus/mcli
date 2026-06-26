@@ -79,13 +79,32 @@ func (c *Core) RemoveServer(name string) error {
 }
 
 // TestServer opens a throwaway connection to verify a server is reachable and the
-// credentials resolve, then closes it. It never disturbs the live connection.
+// credentials resolve, then closes it. It never disturbs the live connection. If
+// the password source needs interactive entry it returns ErrPasswordRequired, and
+// the caller should retry via TestServerWith.
 func (c *Core) TestServer(ctx context.Context, name string) error {
 	srv, ok := c.servers.Servers[name]
 	if !ok {
 		return fmt.Errorf("no server named %q", name)
 	}
-	ad, err := c.dialAdapter(ctx, srv)
+	password, err := resolvePassword(name, srv)
+	if err != nil {
+		return err
+	}
+	return c.testWith(ctx, srv, password)
+}
+
+// TestServerWith verifies reachability using an explicitly supplied password.
+func (c *Core) TestServerWith(ctx context.Context, name, password string) error {
+	srv, ok := c.servers.Servers[name]
+	if !ok {
+		return fmt.Errorf("no server named %q", name)
+	}
+	return c.testWith(ctx, srv, password)
+}
+
+func (c *Core) testWith(ctx context.Context, srv config.Server, password string) error {
+	ad, err := c.dialAdapter(ctx, srv, password)
 	if err != nil {
 		return err
 	}

@@ -10,23 +10,23 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 6 complete (with one caveat). All five adapters exist: PostgreSQL,
-  SQL Server, MySQL/MariaDB, Oracle, DB2. MySQL/MariaDB, Oracle (and earlier
-  Postgres) are live-verified. SQL Server is code-complete + unit-tested (TDS login
-  reached the live VM) but its data round-trip awaits the real password. DB2 is
-  code-complete behind `-tags db2` but UNVERIFIED — the pure-Go go-db2 driver is a
-  WIP that fails DRDA `PRPSQLSTT` on every statement against Db2 11.5 (see below).
-- **Next up:** Phase 7 — server management (`\server add/edit/remove/test`),
-  password sources (keyring), and the safety core. Loose ends to revisit: live
-  SQL Server round-trip (needs password); DB2 (needs a working driver).
+- **Phase:** 7 complete. Safety core, server management, and password sources
+  all landed. Phases 1–6 done (six adapters; DB2 behind `-tags db2`). MySQL/
+  MariaDB, Oracle, and Postgres are live-verified; SQL Server reached TDS login
+  (data round-trip awaits the real password); DB2 is unverified (WIP driver).
+- **Next up:** Phase 8 — AI assistance (`internal/ai`): `ai.json` providers,
+  `\ai ask`, explain/fix current SQL, schema context. Loose ends to revisit:
+  live SQL Server round-trip (needs password); DB2 (needs a working driver).
 - **Last updated:** 2026-06-25
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
   auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
   Non-Postgres test DB creds are in the `test-databases` memory; MariaDB uses a
   dedicated TCP user `mcli`/`mcli_test` (root there is unix_socket-only).
-  **GOTCHA:** `go-db2` is only used under `-tags db2`, so a plain `go mod tidy`
-  will PRUNE it from go.mod and break the tagged build. Don't run bare
-  `go mod tidy`; if you must, re-`go get github.com/obaydullahmhs/go-db2` after.
+  **GOTCHA (revised):** `go-db2` is only used under `-tags db2`. The PLAN
+  previously warned a bare `go mod tidy` would prune it — but the Go 1.25.7
+  `tidy` actually KEEPS tag-gated requires (verified: go-db2 survived a bare
+  tidy, now a direct require). Still, double-check `go build -tags db2 ./...`
+  after any `go mod tidy`.
 
 ---
 
@@ -129,9 +129,27 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 ## Phase 7 — Server management and safety hardening
 - [x] `\server list` and `\server show <name>` (read-only) brought forward for usability;
       bare `\connect` lists available servers; Tab completes server names + `\list` targets
-- [ ] `\server add/edit/remove/test` (§13)
-- [ ] Password sources: keyring (`zalando/go-keyring`) with `prompt`/`env:` fallback
-- [ ] Safety core: dangerous-SQL confirmation, read-only mode, production write guards, optional command blocking on prod (`internal/core/safety`, §17)
+- [x] Safety core (`internal/core/safety`, §17): a pure classifier (read-only /
+      write / dangerous; comments + literals blanked so a WHERE or keyword hiding
+      in one can't fool it) + a Policy that decides Allow/Confirm/Block from the
+      verdict and the connected server's environment. Settings gained `read_only`,
+      `block_dangerous_on_prod`, `dangerous_sql`. Core enforces Block in
+      RunStatement (safety net for every front-end); Confirm is a front-end job.
+      TUI: a reusable interactive sub-prompt primitive (modePrompt + pending) —
+      every SQL entry point funnels through `guardedSQL`; `\readonly [on|off]`.
+- [x] `\server add/edit/remove/test` (§13): core CRUD persisting servers.json with
+      validation, plus TestServer (throwaway dial). TUI add/edit run an interactive
+      wizard built on the sub-prompt primitive (one field per line, blank = keep
+      default, re-ask on validation error, Esc cancels). Live-verified add+test
+      against local Postgres.
+- [x] Password sources: keyring (`zalando/go-keyring`) with `prompt`/`env:`
+      fallback. resolvePassword now handles env:VAR and keyring (miss or
+      unavailable → `ErrPasswordRequired`, the headless fallback §7); `prompt`
+      always returns it. Connect/TestServer return ErrPasswordRequired; the TUI
+      catches it (in the background op, keeping keyring off the UI thread), opens a
+      MASKED prompt, and retries via ConnectWithPassword/TestServerWith. `\server
+      set-password`/`clear-password` store/remove a keyring secret. Keyring access
+      unit-tested via `keyring.MockInit()`.
 
 ## Phase 8 — AI assistance (`internal/ai`)
 - [ ] `ai.json` providers

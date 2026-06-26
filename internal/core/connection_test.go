@@ -25,7 +25,7 @@ func TestResolvePassword(t *testing.T) {
 		{"weird", "", true},
 	}
 	for _, c := range cases {
-		got, err := resolvePassword(config.Server{PasswordSource: c.src})
+		got, err := resolvePassword("test", config.Server{PasswordSource: c.src})
 		if (err != nil) != c.wantErr {
 			t.Errorf("resolvePassword(%q) err = %v, wantErr %v", c.src, err, c.wantErr)
 		}
