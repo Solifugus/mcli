@@ -15,6 +15,7 @@ const (
 	DialectTSQL       Dialect = "tsql"
 	DialectMySQL      Dialect = "mysql"
 	DialectOracle     Dialect = "oracle"
+	DialectDB2        Dialect = "db2"
 	DialectGenericSQL Dialect = "sql"
 )
 

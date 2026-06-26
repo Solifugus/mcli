@@ -10,18 +10,23 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 6 nearly done. MySQL/MariaDB and Oracle adapters both live-verified;
-  SQL Server adapter code-complete and unit-tested (TDS login reached on the live
-  VM) but data round-trip pending its real password. Only DB2 (build-tagged) left.
-- **Next up:** DB2 adapter behind a build tag (`obaydullahmhs/go-db2` pure-Go vs
-  CGo `ibmdb/go_ibm_db`). Circle back to live-verify SQL Server when its password
-  is available. Then Phase 6 is complete.
+- **Phase:** 6 complete (with one caveat). All five adapters exist: PostgreSQL,
+  SQL Server, MySQL/MariaDB, Oracle, DB2. MySQL/MariaDB, Oracle (and earlier
+  Postgres) are live-verified. SQL Server is code-complete + unit-tested (TDS login
+  reached the live VM) but its data round-trip awaits the real password. DB2 is
+  code-complete behind `-tags db2` but UNVERIFIED — the pure-Go go-db2 driver is a
+  WIP that fails DRDA `PRPSQLSTT` on every statement against Db2 11.5 (see below).
+- **Next up:** Phase 7 — server management (`\server add/edit/remove/test`),
+  password sources (keyring), and the safety core. Loose ends to revisit: live
+  SQL Server round-trip (needs password); DB2 (needs a working driver).
 - **Last updated:** 2026-06-25
-- **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb's requirement). System Go
-  is 1.24.4, but `GOTOOLCHAIN=auto` auto-downloads the toolchain (no sudo). `gh` CLI
-  is not installed — use plain `git`. Non-Postgres test DB creds are in the
-  `test-databases` memory; MariaDB uses a dedicated TCP user `mcli`/`mcli_test`
-  (root there is unix_socket-only).
+- **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
+  auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
+  Non-Postgres test DB creds are in the `test-databases` memory; MariaDB uses a
+  dedicated TCP user `mcli`/`mcli_test` (root there is unix_socket-only).
+  **GOTCHA:** `go-db2` is only used under `-tags db2`, so a plain `go mod tidy`
+  will PRUNE it from go.mod and break the tagged build. Don't run bare
+  `go mod tidy`; if you must, re-`go get github.com/obaydullahmhs/go-db2` after.
 
 ---
 
@@ -110,7 +115,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
       `VALUES (a),(b)` (dialect-aware in core/transfer); (2) the adapter pins ISO
       `NLS_DATE_FORMAT`/`NLS_TIMESTAMP_FORMAT` and renders `time.Time` to match, so
       DATE columns round-trip through text-literal import.
-- [ ] DB2 last, behind a build tag — decide pure-Go (`obaydullahmhs/go-db2`) vs CGo (`ibmdb/go_ibm_db`)
+- [x] DB2 behind `-tags db2` (pure-Go `obaydullahmhs/go-db2`; type `db2`,
+      DialectDB2). Adapter code-complete and compiles (`go build -tags db2`),
+      unit-tested (DSN/registration), with standard Db2 SQL (SYSCAT catalog,
+      `SET CURRENT SCHEMA`, double-quote idents, multi-row VALUES; date round-trips
+      as date-only). Default build stays pure-Go — db2 import lives in a tagged
+      file (`adapters_db2.go`). **UNVERIFIED against a live server:** the chosen
+      pure-Go driver is a self-described WIP whose DRDA prepare (`PRPSQLSTT`) fails
+      on every statement against Db2 Community 11.5 (connects/pings fine, then EOF).
+      User chose to keep the pure-Go adapter and revisit when the driver matures;
+      the CGo `ibmdb/go_ibm_db` is the fallback if working DB2 is needed sooner.
 
 ## Phase 7 — Server management and safety hardening
 - [x] `\server list` and `\server show <name>` (read-only) brought forward for usability;
