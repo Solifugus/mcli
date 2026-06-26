@@ -12,7 +12,7 @@ func TestBuildInsert(t *testing.T) {
 		{"1", "alice"},
 		{"2", "o'brien"}, // single quote must be doubled
 		{"3", ""},        // empty cell -> NULL
-	}, quoteIdent)
+	}, quoteIdent, false)
 	if err != nil {
 		t.Fatalf("buildInsert: %v", err)
 	}
@@ -30,8 +30,43 @@ func TestBuildInsert(t *testing.T) {
 }
 
 func TestBuildInsertRaggedRowErrors(t *testing.T) {
-	if _, err := buildInsert("t", []string{"a", "b"}, [][]string{{"1"}}, quoteIdent); err == nil {
+	if _, err := buildInsert("t", []string{"a", "b"}, [][]string{{"1"}}, quoteIdent, false); err == nil {
 		t.Error("expected error for a row with the wrong field count")
+	}
+}
+
+func TestBuildInsertOracleAll(t *testing.T) {
+	stmt, err := buildInsert("members", []string{"id", "name"}, [][]string{
+		{"1", "alice"},
+		{"2", "bob"},
+	}, quoteIdent, true)
+	if err != nil {
+		t.Fatalf("buildInsert oracle: %v", err)
+	}
+	// Oracle cannot take INSERT INTO ... VALUES (a),(b); it needs INSERT ALL.
+	for _, want := range []string{
+		`INSERT ALL`,
+		`INTO members ("id", "name") VALUES ('1', 'alice')`,
+		`INTO members ("id", "name") VALUES ('2', 'bob')`,
+		`SELECT 1 FROM dual`,
+	} {
+		if !strings.Contains(stmt, want) {
+			t.Errorf("oracle insert missing %q:\n%s", want, stmt)
+		}
+	}
+	if strings.Contains(stmt, "VALUES ('1', 'alice'), ('2', 'bob')") {
+		t.Errorf("oracle insert used the unsupported multi-row VALUES form:\n%s", stmt)
+	}
+}
+
+func TestBuildInsertPositionalOracle(t *testing.T) {
+	std := buildInsertPositional("t", [][]string{{"1", "a"}, {"2", "b"}}, false)
+	if !strings.Contains(std, "VALUES ('1', 'a'), ('2', 'b')") {
+		t.Errorf("standard positional = %q", std)
+	}
+	ora := buildInsertPositional("t", [][]string{{"1", "a"}, {"2", "b"}}, true)
+	if !strings.Contains(ora, "INSERT ALL") || !strings.Contains(ora, "SELECT 1 FROM dual") {
+		t.Errorf("oracle positional = %q", ora)
 	}
 }
 

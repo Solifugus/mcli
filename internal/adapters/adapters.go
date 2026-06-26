@@ -7,5 +7,6 @@ package adapters
 import (
 	_ "github.com/Solifugus/mcli/internal/adapters/mssql"
 	_ "github.com/Solifugus/mcli/internal/adapters/mysql"
+	_ "github.com/Solifugus/mcli/internal/adapters/oracle"
 	_ "github.com/Solifugus/mcli/internal/adapters/postgres"
 )

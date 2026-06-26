@@ -10,11 +10,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 6 in progress. MySQL/MariaDB adapter live-verified against a local
-  MariaDB; SQL Server adapter code-complete and unit-tested (TDS login reached on
-  the live VM) but data round-trip pending its real password. Oracle and DB2 next.
-- **Next up:** Oracle adapter (`go-ora`), then DB2 behind a build tag. Circle back
-  to live-verify SQL Server when its password is available.
+- **Phase:** 6 nearly done. MySQL/MariaDB and Oracle adapters both live-verified;
+  SQL Server adapter code-complete and unit-tested (TDS login reached on the live
+  VM) but data round-trip pending its real password. Only DB2 (build-tagged) left.
+- **Next up:** DB2 adapter behind a build tag (`obaydullahmhs/go-db2` pure-Go vs
+  CGo `ibmdb/go_ibm_db`). Circle back to live-verify SQL Server when its password
+  is available. Then Phase 6 is complete.
 - **Last updated:** 2026-06-25
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb's requirement). System Go
   is 1.24.4, but `GOTOOLCHAIN=auto` auto-downloads the toolchain (no sudo). `gh` CLI
@@ -99,7 +100,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
       Required dialect-aware identifier quoting in core (MySQL backticks vs standard
       double quotes) since `"id"` is a string literal in MySQL without ANSI_QUOTES.
       ExplainQuery implemented (renders `EXPLAIN` rows). schema==database mapping.
-- [ ] Oracle (`go-ora`, not CGo `godror`)
+- [x] Oracle (`sijms/go-ora/v2`, pure Go; type `oracle`, DialectOracle) —
+      **live-verified** against the oracle-free 23ai container: connect, schema
+      navigation (`use` → ALTER SESSION SET CURRENT_SCHEMA on a single pinned
+      connection; ListDatabases/Schemas = non-system `all_users`), list/describe
+      (PK via all_constraints), typed query, CSV export/import round-trip. Needed
+      two Oracle-specific accommodations: (1) the import path emits
+      `INSERT ALL … SELECT 1 FROM dual` for Oracle since it rejects multi-row
+      `VALUES (a),(b)` (dialect-aware in core/transfer); (2) the adapter pins ISO
+      `NLS_DATE_FORMAT`/`NLS_TIMESTAMP_FORMAT` and renders `time.Time` to match, so
+      DATE columns round-trip through text-literal import.
 - [ ] DB2 last, behind a build tag — decide pure-Go (`obaydullahmhs/go-db2`) vs CGo (`ibmdb/go_ibm_db`)
 
 ## Phase 7 — Server management and safety hardening

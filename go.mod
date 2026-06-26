@@ -13,6 +13,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/microsoft/go-mssqldb v1.10.0
+	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/xuri/excelize/v2 v2.10.1
 )
 

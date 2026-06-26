@@ -223,7 +223,7 @@ func (c *Core) ImportFile(ctx context.Context, srcPath, table, sheet string) (in
 	imported := 0
 	for start := 0; start < len(rows); start += importBatchSize {
 		end := min(start+importBatchSize, len(rows))
-		stmt, err := buildInsert(table, header, rows[start:end], c.identQuoter())
+		stmt, err := buildInsert(table, header, rows[start:end], c.identQuoter(), c.isOracle())
 		if err != nil {
 			return imported, err
 		}
@@ -261,7 +261,7 @@ func (c *Core) ImportFixedFile(ctx context.Context, srcPath, table string, width
 	imported := 0
 	for start := 0; start < len(rows); start += importBatchSize {
 		end := min(start+importBatchSize, len(rows))
-		stmt := buildInsertPositional(table, rows[start:end])
+		stmt := buildInsertPositional(table, rows[start:end], c.isOracle())
 		if _, err := c.conn.RunStatement(ctx, stmt); err != nil {
 			return imported, fmt.Errorf("import: row %d: %w", start+1, err)
 		}
@@ -273,8 +273,21 @@ func (c *Core) ImportFixedFile(ctx context.Context, srcPath, table string, width
 
 // buildInsertPositional constructs a multi-row INSERT without a column list, so
 // values map onto the table's columns in declared order. Used for fixed-width
-// import, which has no header to name columns.
-func buildInsertPositional(table string, rows [][]string) string {
+// import, which has no header to name columns. When oracle is set, the
+// Oracle-only multi-row form (INSERT ALL … SELECT 1 FROM dual) is emitted.
+func buildInsertPositional(table string, rows [][]string, oracle bool) string {
+	if oracle {
+		var b strings.Builder
+		b.WriteString("INSERT ALL")
+		for _, row := range rows {
+			b.WriteString(" INTO ")
+			b.WriteString(table)
+			b.WriteString(" VALUES ")
+			writeRowValues(&b, row)
+		}
+		b.WriteString(" SELECT 1 FROM dual")
+		return b.String()
+	}
 	var b strings.Builder
 	b.WriteString("INSERT INTO ")
 	b.WriteString(table)
@@ -283,56 +296,82 @@ func buildInsertPositional(table string, rows [][]string) string {
 		if r > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteByte('(')
-		for i, v := range row {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(sqlLiteral(v))
-		}
-		b.WriteByte(')')
+		writeRowValues(&b, row)
 	}
 	return b.String()
 }
 
 // buildInsert constructs a multi-row INSERT. Column identifiers are quoted by the
 // supplied quoter (dialect-specific) and values are emitted as SQL literals
-// (empty cell → NULL). This is the adapter-uniform path (§22); per-dialect bulk
+// (empty cell → NULL). Most dialects accept the standard multi-row VALUES form;
+// Oracle does not, so when oracle is set the INSERT ALL … SELECT 1 FROM dual form
+// is used instead. This is the adapter-uniform path (§22); per-dialect bulk
 // loaders can come later.
-func buildInsert(table string, cols []string, rows [][]string, quote func(string) string) (string, error) {
-	var b strings.Builder
-	b.WriteString("INSERT INTO ")
-	b.WriteString(table)
-	b.WriteString(" (")
-	for i, col := range cols {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(quote(col))
-	}
-	b.WriteString(") VALUES ")
+func buildInsert(table string, cols []string, rows [][]string, quote func(string) string, oracle bool) (string, error) {
 	for r, row := range rows {
 		if len(row) != len(cols) {
 			return "", fmt.Errorf("import: row %d has %d fields, want %d", r+1, len(row), len(cols))
 		}
+	}
+	colList := "(" + quoteCols(cols, quote) + ")"
+
+	var b strings.Builder
+	if oracle {
+		b.WriteString("INSERT ALL")
+		for _, row := range rows {
+			b.WriteString(" INTO ")
+			b.WriteString(table)
+			b.WriteByte(' ')
+			b.WriteString(colList)
+			b.WriteString(" VALUES ")
+			writeRowValues(&b, row)
+		}
+		b.WriteString(" SELECT 1 FROM dual")
+		return b.String(), nil
+	}
+
+	b.WriteString("INSERT INTO ")
+	b.WriteString(table)
+	b.WriteByte(' ')
+	b.WriteString(colList)
+	b.WriteString(" VALUES ")
+	for r, row := range rows {
 		if r > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteByte('(')
-		for i, v := range row {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(sqlLiteral(v))
-		}
-		b.WriteByte(')')
+		writeRowValues(&b, row)
 	}
 	return b.String(), nil
+}
+
+// quoteCols renders a comma-separated, quoted column list.
+func quoteCols(cols []string, quote func(string) string) string {
+	parts := make([]string, len(cols))
+	for i, col := range cols {
+		parts[i] = quote(col)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// writeRowValues writes a parenthesized, comma-separated tuple of SQL literals.
+func writeRowValues(b *strings.Builder, row []string) {
+	b.WriteByte('(')
+	for i, v := range row {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(sqlLiteral(v))
+	}
+	b.WriteByte(')')
 }
 
 // identQuoter returns the identifier quoter for the connected dialect. MySQL and
 // MariaDB use backticks (double quotes are string literals there unless
 // ANSI_QUOTES is set); every other dialect uses standard double quotes.
+// isOracle reports whether the live connection speaks Oracle, which needs the
+// INSERT ALL multi-row form instead of the standard multi-row VALUES.
+func (c *Core) isOracle() bool { return c.dialect == adapter.DialectOracle }
+
 func (c *Core) identQuoter() func(string) string {
 	if c.dialect == adapter.DialectMySQL {
 		return quoteIdentBacktick
