@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/transfer"
 )
 
@@ -222,7 +223,7 @@ func (c *Core) ImportFile(ctx context.Context, srcPath, table, sheet string) (in
 	imported := 0
 	for start := 0; start < len(rows); start += importBatchSize {
 		end := min(start+importBatchSize, len(rows))
-		stmt, err := buildInsert(table, header, rows[start:end])
+		stmt, err := buildInsert(table, header, rows[start:end], c.identQuoter())
 		if err != nil {
 			return imported, err
 		}
@@ -294,10 +295,11 @@ func buildInsertPositional(table string, rows [][]string) string {
 	return b.String()
 }
 
-// buildInsert constructs a multi-row INSERT. Identifiers are double-quoted and
-// values are emitted as SQL literals (empty cell → NULL). This is the
-// adapter-uniform path (§22); per-dialect bulk loaders can come later.
-func buildInsert(table string, cols []string, rows [][]string) (string, error) {
+// buildInsert constructs a multi-row INSERT. Column identifiers are quoted by the
+// supplied quoter (dialect-specific) and values are emitted as SQL literals
+// (empty cell → NULL). This is the adapter-uniform path (§22); per-dialect bulk
+// loaders can come later.
+func buildInsert(table string, cols []string, rows [][]string, quote func(string) string) (string, error) {
 	var b strings.Builder
 	b.WriteString("INSERT INTO ")
 	b.WriteString(table)
@@ -306,7 +308,7 @@ func buildInsert(table string, cols []string, rows [][]string) (string, error) {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString(quoteIdent(col))
+		b.WriteString(quote(col))
 	}
 	b.WriteString(") VALUES ")
 	for r, row := range rows {
@@ -328,10 +330,26 @@ func buildInsert(table string, cols []string, rows [][]string) (string, error) {
 	return b.String(), nil
 }
 
+// identQuoter returns the identifier quoter for the connected dialect. MySQL and
+// MariaDB use backticks (double quotes are string literals there unless
+// ANSI_QUOTES is set); every other dialect uses standard double quotes.
+func (c *Core) identQuoter() func(string) string {
+	if c.dialect == adapter.DialectMySQL {
+		return quoteIdentBacktick
+	}
+	return quoteIdent
+}
+
 // quoteIdent double-quotes an identifier, escaping embedded quotes. Standard SQL
-// (and Postgres); other dialects can override once they land.
+// (and Postgres, SQL Server with QUOTED_IDENTIFIER ON).
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// quoteIdentBacktick backtick-quotes an identifier for MySQL/MariaDB, escaping
+// embedded backticks by doubling.
+func quoteIdentBacktick(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }
 
 // sqlLiteral renders a cell as a SQL literal: an empty cell becomes NULL, and

@@ -55,6 +55,7 @@ func (c *Core) Connect(ctx context.Context, name string) error {
 		Password:         password,
 		Database:         srv.DefaultDatabase,
 		ConnectionString: srv.ConnectionString,
+		Params:           srv.Options,
 	}
 	if err := ad.Connect(ctx, params); err != nil {
 		return err

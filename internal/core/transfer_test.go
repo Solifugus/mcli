@@ -12,7 +12,7 @@ func TestBuildInsert(t *testing.T) {
 		{"1", "alice"},
 		{"2", "o'brien"}, // single quote must be doubled
 		{"3", ""},        // empty cell -> NULL
-	})
+	}, quoteIdent)
 	if err != nil {
 		t.Fatalf("buildInsert: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestBuildInsert(t *testing.T) {
 }
 
 func TestBuildInsertRaggedRowErrors(t *testing.T) {
-	if _, err := buildInsert("t", []string{"a", "b"}, [][]string{{"1"}}); err == nil {
+	if _, err := buildInsert("t", []string{"a", "b"}, [][]string{{"1"}}, quoteIdent); err == nil {
 		t.Error("expected error for a row with the wrong field count")
 	}
 }
@@ -38,6 +38,9 @@ func TestBuildInsertRaggedRowErrors(t *testing.T) {
 func TestQuoteIdentAndLiteral(t *testing.T) {
 	if got := quoteIdent(`we"ird`); got != `"we""ird"` {
 		t.Errorf("quoteIdent = %q", got)
+	}
+	if got := quoteIdentBacktick("we`ird"); got != "`we``ird`" {
+		t.Errorf("quoteIdentBacktick = %q", got)
 	}
 	if got := sqlLiteral(""); got != "NULL" {
 		t.Errorf("empty literal = %q, want NULL", got)

@@ -10,15 +10,17 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 5 complete. CSV/TSV/pipe + Excel `.xlsx` + fixed-width (`.txt`/`.fix`)
-  import/export all working and round-trip-verified against real Postgres. The
-  flat-file editable grid (§11) is intentionally deferred — separate, larger feature.
-- **Next up:** Phase 6 — additional pure-Go adapters (MySQL/MariaDB, then Oracle;
-  DB2 last behind a build tag).
+- **Phase:** 6 in progress. MySQL/MariaDB adapter live-verified against a local
+  MariaDB; SQL Server adapter code-complete and unit-tested (TDS login reached on
+  the live VM) but data round-trip pending its real password. Oracle and DB2 next.
+- **Next up:** Oracle adapter (`go-ora`), then DB2 behind a build tag. Circle back
+  to live-verify SQL Server when its password is available.
 - **Last updated:** 2026-06-25
-- **Notes:** `go.mod` is on Go 1.25.0. The system Go is 1.24.4, but `GOTOOLCHAIN=auto`
-  auto-downloads 1.25 into `~/go/pkg/mod` (no sudo) — verified building/testing under
-  1.25.0. `gh` CLI is not installed — use plain `git`.
+- **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb's requirement). System Go
+  is 1.24.4, but `GOTOOLCHAIN=auto` auto-downloads the toolchain (no sudo). `gh` CLI
+  is not installed — use plain `git`. Non-Postgres test DB creds are in the
+  `test-databases` memory; MariaDB uses a dedicated TCP user `mcli`/`mcli_test`
+  (root there is unix_socket-only).
 
 ---
 
@@ -85,7 +87,18 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
       against real Postgres incl. NULL→blank→NULL. Flat-file grid editing deferred (§11).
 
 ## Phase 6 — Additional adapters
-- [ ] MySQL / MariaDB (`go-sql-driver/mysql`)
+- [x] SQL Server (`microsoft/go-mssqldb`, pure Go; type `sqlserver`, DialectTSQL).
+      Brought forward because a live dev VM was available. Code-complete + unit-tested;
+      reached TDS login against the VM. Live data round-trip pending the real password
+      (the committed `ass` DSN shows a placeholder). Added a per-server `options` map
+      (config.Server.Options → ConnectParams.Params) so flags like `encrypt=disable`
+      are explicit rather than an insecure adapter default.
+- [x] MySQL / MariaDB (`go-sql-driver/mysql`, pure Go; type `mysql`, DialectMySQL) —
+      **live-verified** against local MariaDB: connect, list, describe (PK via
+      COLUMN_KEY), typed query, CSV export/import round-trip, fixed-width export.
+      Required dialect-aware identifier quoting in core (MySQL backticks vs standard
+      double quotes) since `"id"` is a string literal in MySQL without ANSI_QUOTES.
+      ExplainQuery implemented (renders `EXPLAIN` rows). schema==database mapping.
 - [ ] Oracle (`go-ora`, not CGo `godror`)
 - [ ] DB2 last, behind a build tag — decide pure-Go (`obaydullahmhs/go-db2`) vs CGo (`ibmdb/go_ibm_db`)
 

@@ -94,6 +94,11 @@ type Server struct {
 	User             string `json:"user,omitempty"`
 	ConnectionString string `json:"connection_string,omitempty"`
 	PasswordSource   string `json:"password_source,omitempty"`
+	// Options are driver-specific connection flags (e.g. SQL Server "encrypt",
+	// Oracle "ssl") passed through to the adapter. Keeping them explicit in
+	// config avoids baking insecure defaults into an adapter that may also reach
+	// production.
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // ServersConfig is the contents of servers.json.

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -98,7 +99,7 @@ func TestServersRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadServers: %v", err)
 	}
-	if len(got.Servers) != 2 || got.Servers["local_pg"] != want.Servers["local_pg"] {
+	if len(got.Servers) != 2 || !reflect.DeepEqual(got.Servers["local_pg"], want.Servers["local_pg"]) {
 		t.Errorf("round trip = %+v", got)
 	}
 }
