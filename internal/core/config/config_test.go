@@ -31,7 +31,7 @@ func TestLoadDefaultsWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSettings: %v", err)
 	}
-	if want := DefaultSettings(); got != want {
+	if want := DefaultSettings(); !reflect.DeepEqual(got, want) {
 		t.Errorf("settings defaults = %+v, want %+v", got, want)
 	}
 
@@ -60,6 +60,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 		MaxRowsDefault:      1000,
 		ConfirmDangerousSQL: false,
 		Editor:              "builtin",
+		ReadOnly:            true,
+		DangerousSQL:        []string{"DROP", "GRANT"},
 	}
 	if err := s.SaveSettings(want); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
@@ -68,7 +70,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSettings: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }

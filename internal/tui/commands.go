@@ -27,9 +27,18 @@ func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); retur
 // command (e.g. the \edit editor handoff), neither for a purely synchronous
 // command.
 type action struct {
-	async asyncRun
-	cmd   tea.Cmd
-	grid  bool // open the last result in the alt-screen grid
+	async   asyncRun
+	cmd     tea.Cmd
+	grid    bool        // open the last result in the alt-screen grid
+	confirm *confirmReq // ask before running confirm.run as a background op
+	prompt  *pending    // enter an interactive sub-prompt
+}
+
+// confirmReq asks the user a yes/no question before launching a background op.
+// It is how the safety layer (§17) gates dangerous SQL and production writes.
+type confirmReq struct {
+	question string
+	run      asyncRun
 }
 
 func sync() action            { return action{} }
@@ -80,8 +89,9 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 		res, c := m.cmdEdit(args)
 		return res, runCmd(c)
 	case `\run`:
-		res, run := m.cmdRun(args)
-		return res, async(run)
+		return m.cmdRun(args)
+	case `\readonly`:
+		return m.cmdReadonly(args), sync()
 	case `\grid`:
 		return cmdResult{}, gridAction()
 	case `\export`:
@@ -94,9 +104,33 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 		if strings.HasPrefix(cmd, `\`) {
 			return out("unknown command: " + cmd + " (try \\help)"), sync()
 		}
-		// Bare input is SQL, run against the live connection.
-		return cmdResult{}, async(m.sqlRunner(line))
+		// Bare input is SQL, run against the live connection (behind the guard).
+		return m.guardedSQL(line)
 	}
+}
+
+// cmdReadonly shows or toggles the session read-only guard (§17).
+func (m *Model) cmdReadonly(args []string) cmdResult {
+	if len(args) == 0 {
+		return out("read-only mode is " + onOff(m.core.ReadOnly()))
+	}
+	switch strings.ToLower(args[0]) {
+	case "on", "true", "1":
+		m.core.SetReadOnly(true)
+		return out("read-only mode on — only read-only statements will run")
+	case "off", "false", "0":
+		m.core.SetReadOnly(false)
+		return out("read-only mode off")
+	default:
+		return out(`usage: \readonly [on|off]`)
+	}
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 // --- SQL file commands (§15) ---
@@ -332,6 +366,7 @@ func helpText() cmdResult {
 		`  \list databases|schemas|tables|views          list objects`,
 		`  \describe <table>                             show columns`,
 		`  <sql>                                         run SQL on the connection`,
+		`  \readonly [on|off]                            show or toggle read-only guard`,
 		`  \grid                                         open the last result in a scrollable grid`,
 		`  \export query <name>|table <name>|current to <path> [exact]   export to CSV/TSV/pipe/xlsx/fixed`,
 		`  \import <path> [sheet <name>|widths N,N,...] into <table>   load a delimited/xlsx/fixed file`,

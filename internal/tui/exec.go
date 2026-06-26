@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Solifugus/mcli/internal/core/adapter"
+	"github.com/Solifugus/mcli/internal/core/safety"
 )
 
 var errNoCurrentResult = errors.New("no current result — run a query first")
@@ -248,19 +249,36 @@ func indexOf(ss []string, want string) int {
 }
 
 // cmdRun executes a workspace SQL file against the live connection, reusing the
-// bare-SQL runner. Multi-statement files are a future enhancement.
-func (m *Model) cmdRun(args []string) (cmdResult, asyncRun) {
+// bare-SQL runner (and its safety guard). Multi-statement files are a future
+// enhancement.
+func (m *Model) cmdRun(args []string) (cmdResult, action) {
 	if len(args) < 1 {
-		return out(`usage: \run <name>`), nil
+		return out(`usage: \run <name>`), sync()
 	}
 	content, err := m.core.ReadSQLFile(args[0])
 	if err != nil {
-		return errOut(err), nil
+		return errOut(err), sync()
 	}
 	if strings.TrimSpace(content) == "" {
-		return out("file " + args[0] + " is empty"), nil
+		return out("file " + args[0] + " is empty"), sync()
 	}
-	return cmdResult{}, m.sqlRunner(content)
+	return m.guardedSQL(content)
+}
+
+// guardedSQL applies the safety policy (§17) to a statement before running it:
+// Block reports the reason and runs nothing, Confirm wraps the run in a yes/no
+// prompt, and Allow runs it as an ordinary background op. Every SQL entry point
+// (bare line and \run) funnels through here so the guard cannot be bypassed.
+func (m *Model) guardedSQL(sql string) (cmdResult, action) {
+	runner := m.sqlRunner(sql)
+	switch act, _, reason := m.core.GuardStatement(sql); act {
+	case safety.Block:
+		return out("blocked: " + reason), sync()
+	case safety.Confirm:
+		return cmdResult{}, action{confirm: &confirmReq{question: reason, run: runner}}
+	default:
+		return cmdResult{}, async(runner)
+	}
 }
 
 // sqlRunner runs bare SQL: row-returning statements stream into an aligned table

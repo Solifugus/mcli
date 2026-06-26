@@ -27,6 +27,10 @@ type Core struct {
 	conn       adapter.Adapter
 	connServer string
 	dialect    adapter.Dialect
+
+	// readOnly is the runtime read-only toggle (seeded from settings, flipped by
+	// \readonly). It guards writes in RunStatement; see internal/core/safety.go.
+	readOnly bool
 }
 
 // Open initializes mcli rooted at the given ~/.mcli directory: it ensures the
@@ -50,7 +54,7 @@ func Open(root string) (*Core, error) {
 		return nil, err
 	}
 
-	c := &Core{cfg: cfg, workspaces: wm, settings: settings, servers: servers}
+	c := &Core{cfg: cfg, workspaces: wm, settings: settings, servers: servers, readOnly: settings.ReadOnly}
 
 	start := settings.StartupWorkspace
 	if start == "" || !wm.Exists(start) {

@@ -20,9 +20,22 @@ import (
 type mode int
 
 const (
-	modeREPL mode = iota
-	modeGrid // reserved for Phase 4
+	modeREPL   mode = iota
+	modeGrid        // alt-screen result/flat-file grid
+	modePrompt      // a one-shot interactive sub-prompt (confirm, password, wizard)
 )
+
+// pending is an in-progress interactive sub-prompt. While set, the REPL is in
+// modePrompt: the next submitted line (or Esc/Ctrl-C to cancel) is delivered to
+// resume instead of being executed as a command. resume runs on the UI thread,
+// may mutate the model (e.g. set running state), may chain a follow-up prompt,
+// and returns the tea.Cmd to perform next. It is the foundation shared by
+// dangerous-SQL confirmation, password entry, and the \server add/edit wizard.
+type pending struct {
+	label  string // shown in place of the normal prompt
+	mask   bool   // render typed input as asterisks (passwords)
+	resume func(m *Model, text string, canceled bool) tea.Cmd
+}
 
 // Model is the root Bubble Tea model.
 type Model struct {
@@ -52,6 +65,9 @@ type Model struct {
 	// Ctrl-C cancels via cancel() instead of quitting.
 	running bool
 	cancel  context.CancelFunc
+
+	// pending is the active interactive sub-prompt, set when mode == modePrompt.
+	pending *pending
 
 	// In-memory command history ring (distinct from the persistent action log).
 	// histIdx walks history; histIdx == len(history) means "the live draft line".
@@ -117,8 +133,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
-		if m.mode == modeGrid {
+		switch m.mode {
+		case modeGrid:
 			return m.handleGridKey(msg)
+		case modePrompt:
+			return m.handlePromptKey(msg)
 		}
 		return m.handleKey(msg)
 	case tea.PasteMsg:
@@ -171,6 +190,51 @@ func (m Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, c)
 	}
 	return m, tea.Sequence(cmds...)
+}
+
+// handlePromptKey routes keys while an interactive sub-prompt is active. Enter
+// delivers the typed text to the pending resume; Esc/Ctrl-C cancels it. The
+// answer is echoed to scrollback (masked when the prompt masks input) so the
+// transcript stays readable. resume may set a new pending to chain steps.
+func (m Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	p := m.pending
+	if p == nil { // defensive; should not happen
+		m.mode = modeREPL
+		return m, nil
+	}
+	canceled := msg.Code == tea.KeyEscape || (msg.Mod == tea.ModCtrl && msg.Code == 'c')
+	if !canceled && msg.Code != tea.KeyEnter {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+
+	text := strings.TrimRight(m.input.Value(), "\n")
+	m.input.Reset()
+	m.pending = nil
+	m.mode = modeREPL
+
+	echo := p.label
+	if !canceled {
+		if p.mask {
+			echo += strings.Repeat("*", len([]rune(text)))
+		} else {
+			echo += text
+		}
+	}
+	resume := p.resume(&m, text, canceled)
+	out := tea.Println(echo)
+	if resume == nil {
+		return m, out
+	}
+	return m, tea.Sequence(out, resume)
+}
+
+// startPrompt enters modePrompt with the given interactive sub-prompt.
+func (m *Model) startPrompt(p pending) {
+	m.pending = &p
+	m.mode = modePrompt
+	m.input.Reset()
 }
 
 // handleGridKey routes keys while the grid is open. Esc/q/Ctrl-C return to the
@@ -322,12 +386,12 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		}
 		m.mode = modeGrid
 		m.grid = newGrid(m.lastResult, m.width, m.height)
+	case act.confirm != nil:
+		m.startConfirm(*act.confirm)
+	case act.prompt != nil:
+		m.startPrompt(*act.prompt)
 	case act.async != nil:
-		ctx, cancel := context.WithCancel(context.Background())
-		m.running = true
-		m.cancel = cancel
-		run := act.async
-		cmds = append(cmds, func() tea.Msg { return run(ctx) })
+		cmds = append(cmds, m.launchAsync(act.async))
 	case act.cmd != nil:
 		// One-shot command such as the \edit editor handoff (no cancel spinner).
 		cmds = append(cmds, act.cmd)
@@ -336,6 +400,41 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.refreshPrompt()
 	}
 	return m, tea.Sequence(cmds...)
+}
+
+// launchAsync marks the model running, wires Ctrl-C cancellation, and returns
+// the tea.Cmd that performs the background work. Shared by submit and by the
+// confirmation prompt so a confirmed dangerous statement runs exactly like any
+// other background op (spinner, cancelable).
+func (m *Model) launchAsync(run asyncRun) tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.running = true
+	m.cancel = cancel
+	return func() tea.Msg { return run(ctx) }
+}
+
+// startConfirm enters a yes/no sub-prompt; on "y"/"yes" it launches req.run as a
+// background op, otherwise it reports "canceled".
+func (m *Model) startConfirm(req confirmReq) {
+	run := req.run
+	m.startPrompt(pending{
+		label: req.question + " — proceed? [y/N] ",
+		resume: func(m *Model, text string, canceled bool) tea.Cmd {
+			if canceled || !isYes(text) {
+				return tea.Println("canceled")
+			}
+			return m.launchAsync(run)
+		},
+	})
+}
+
+// isYes reports whether a confirmation answer is affirmative.
+func isYes(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
 
 // View renders the live line only; committed output lives in scrollback. While a
@@ -348,6 +447,13 @@ func (m Model) View() tea.View {
 		v := tea.NewView(m.grid.View())
 		v.AltScreen = true
 		return v
+	}
+	if m.mode == modePrompt && m.pending != nil {
+		shown := m.input.Value()
+		if m.pending.mask {
+			shown = strings.Repeat("*", len([]rune(shown)))
+		}
+		return tea.NewView(m.pending.label + shown)
 	}
 	content := m.styledPrompt() + renderInput(m.input.Value(), m.input.Position(), m.dialect, m.colorPrompt)
 	if m.running {

@@ -57,6 +57,13 @@ type Settings struct {
 	MaxRowsDefault      int    `json:"max_rows_default"`
 	ConfirmDangerousSQL bool   `json:"confirm_dangerous_sql"`
 	Editor              string `json:"editor"`
+	// Safety guardrails (design §17). ReadOnly starts the session refusing any
+	// non-read statement; it is also togglable at runtime via \readonly.
+	// BlockDangerousOnProd upgrades the prod confirmation to an outright refusal.
+	// DangerousSQL overrides the built-in dangerous-keyword list when non-empty.
+	ReadOnly             bool     `json:"read_only"`
+	BlockDangerousOnProd bool     `json:"block_dangerous_on_prod"`
+	DangerousSQL         []string `json:"dangerous_sql,omitempty"`
 }
 
 // DefaultSettings returns the documented defaults used on first run.

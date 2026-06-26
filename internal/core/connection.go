@@ -9,6 +9,7 @@ import (
 
 	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/config"
+	"github.com/Solifugus/mcli/internal/core/safety"
 )
 
 // ErrNotConnected is returned by database operations when no server is connected.
@@ -159,10 +160,16 @@ func (c *Core) RunQuery(ctx context.Context, sql string) (adapter.RowStream, err
 	return rs, err
 }
 
-// RunStatement executes a non-row-returning statement.
+// RunStatement executes a non-row-returning statement. Blocked statements
+// (read-only mode, dangerous-on-prod) are refused here as a safety net so every
+// front-end inherits the guard even if it forgets to pre-check via
+// GuardStatement; Confirm is a front-end responsibility (it needs UI).
 func (c *Core) RunStatement(ctx context.Context, sql string) (adapter.Result, error) {
 	if c.conn == nil {
 		return adapter.Result{}, ErrNotConnected
+	}
+	if action, _, reason := c.GuardStatement(sql); action == safety.Block {
+		return adapter.Result{}, errors.New(reason)
 	}
 	res, err := c.conn.RunStatement(ctx, sql)
 	if err == nil {
