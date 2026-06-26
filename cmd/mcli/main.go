@@ -4,12 +4,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 
 	_ "github.com/Solifugus/mcli/internal/adapters" // register default DB adapters
 	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/config"
+	"github.com/Solifugus/mcli/internal/mcp"
 	"github.com/Solifugus/mcli/internal/tui"
 )
 
@@ -82,7 +85,20 @@ func runTUI() error {
 	return tui.Run(c)
 }
 
-// runMCP runs the headless MCP server over stdio. Implemented in Phase 9.
+// runMCP runs the headless MCP server over stdio. It serves JSON-RPC requests
+// from stdin and writes responses to stdout until the client closes the stream
+// or the process is interrupted.
 func runMCP() error {
-	return fmt.Errorf("MCP server not yet implemented (Phase 9); see PLAN.md")
+	root, err := config.DefaultRoot()
+	if err != nil {
+		return err
+	}
+	c, err := core.Open(root)
+	if err != nil {
+		return err
+	}
+	mcp.Version = version
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return mcp.Serve(ctx, c, os.Stdin, os.Stdout)
 }

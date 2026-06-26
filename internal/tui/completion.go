@@ -7,11 +7,14 @@ import "strings"
 var replCommands = []string{
 	`\ai`, `\cat`, `\connect`, `\copy`, `\delete`, `\describe`, `\disconnect`,
 	`\edit`, `\enter`, `\export`, `\files`, `\grid`, `\help`, `\import`,
-	`\list`, `\readonly`, `\run`, `\quit`, `\rename`, `\server`, `\workspace`, "use",
+	`\list`, `\mcp`, `\readonly`, `\run`, `\quit`, `\rename`, `\server`, `\workspace`, "use",
 }
 
 // aiSubcommands are the second-token completions for \ai.
 var aiSubcommands = []string{"ask", "explain", "fix", "providers"}
+
+// mcpSubcommands are the second-token completions for \mcp.
+var mcpSubcommands = []string{"serve"}
 
 // workspaceSubcommands are the second-token completions for \workspace.
 var workspaceSubcommands = []string{"create", "delete", "list", "rename", "status"}
@@ -109,6 +112,10 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 	case `\list`:
 		if tokenIndex == 1 {
 			return listTargets
+		}
+	case `\mcp`:
+		if tokenIndex == 1 {
+			return mcpSubcommands
 		}
 	case `\edit`, `\run`, `\cat`, `\delete`:
 		if tokenIndex == 1 {

@@ -10,17 +10,19 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 8 complete. AI assistance landed (OpenAI-compatible client, `\ai`
-  commands). Phases 1–7 done. Six adapters (DB2 behind `-tags db2`); MySQL/
-  MariaDB, Oracle, Postgres live-verified; SQL Server reached TDS login (data
-  round-trip awaits the real password); DB2 unverified (WIP driver).
-- **Next up:** Phase 9 — MCP server (`internal/mcp`): `mcli mcp serve` /
-  `\mcp serve` exposing workspace/server/schema/query/transfer/file tools over
-  the core, with the same safety controls. Loose ends: live SQL Server round-trip
-  (needs password); DB2 (needs a working driver); live AI completion (both the
-  OpenAI and Anthropic keys on this machine authenticate but are out of
-  credit/quota — code is verified up to the billing wall, see Phase 8).
-- **Last updated:** 2026-06-25
+- **Phase:** 9 complete. MCP server landed (`internal/mcp`): a self-contained
+  stdio JSON-RPC 2.0 server, 19 tools, each a thin wrapper over a core function,
+  inheriting the same safety guards as the TUI. `mcli mcp serve` and `\mcp serve`
+  both work. Live-verified end-to-end against the `gbasic` Postgres server:
+  connect → list_tables → run_query returned real rows, describe_table showed PK
+  detection, and a `DELETE` without `WHERE` was refused (confirm=true required) —
+  the guard applies identically headless. AI (Phase 8) is now also live-confirmed
+  after the OpenAI account was funded. Phases 1–8 done.
+- **Next up:** Phase 10 (built-in editor) is deferred; Phase 11 (live-table grid
+  editing) is optional. No required phases remain. Loose ends: live SQL Server
+  round-trip (needs password); DB2 (needs a working driver); Anthropic key still
+  out of credit (OpenAI funded + verified).
+- **Last updated:** 2026-06-25 (Phase 9 complete; AI live-verified)
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
   auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
   Non-Postgres test DB creds are in the `test-databases` memory; MariaDB uses a
@@ -178,8 +180,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] Deferred to a later pass: `\ai generate import for <path>`, `\ai lineage`.
 
 ## Phase 9 — MCP server (`internal/mcp`)
-- [ ] `mcli mcp serve` / `\mcp serve` exposing workspace/server/schema/query/transfer/file tools over core (§21)
-- [ ] Safety controls applied identically to the TUI
+- [x] Self-contained stdio JSON-RPC 2.0 transport (newline-delimited; initialize/tools.list/tools.call/ping, notifications ignored, parse/method errors)
+- [x] 19 tools, each a thin wrapper over a core function: workspaces (list/enter/status), servers (list/connect), schema (databases/use/tables/views/describe/search columns+views), files (list/read/write), query (run_query/run_saved_sql), transfer (export_query/import_file)
+- [x] `mcli mcp serve` (headless over stdin/stdout, SIGINT-clean) wired in `cmd/mcli`
+- [x] `\mcp serve` in the TUI via `tea.Exec` custom `ExecCommand` — hands the suspended terminal's stdio to the same in-process server, returns on Ctrl-C/EOF
+- [x] Safety controls applied identically to the TUI: read-only/dangerous/prod guards via core `GuardStatement`; dangerous statements refused unless `confirm=true` (the headless analogue of the interactive prompt); secrets never returned (curated server view, no connection_string)
+- [x] Two thin core wrappers added (`SearchColumns`/`SearchViews`) so search tools stay thin
+- [x] Tests: protocol (initialize/echo version, notification→no reply, tools/list, unknown method, parse error), tool calls (list_workspaces, status, unknown tool, no-connection, dangerous-refused, confirm-bypasses, write→read round-trip)
+- [x] Live-verified against `gbasic` Postgres: connect → list_tables (6 tables) → run_query (real rows) → describe_table (PK detected) → DELETE-without-WHERE refused
 
 ## Phase 10 — Built-in editor (deferred)
 - [ ] Internal alt-screen editor behind `\edit` + `"editor": "builtin"`: Chroma highlighting, insert/overwrite, OSC 52 copy/paste, keyboard selection, SQL-aware execution

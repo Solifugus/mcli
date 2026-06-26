@@ -158,6 +158,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Println("editor error: " + msg.err.Error())
 		}
 		return m, tea.Println("edited " + msg.name)
+	case mcpDoneMsg:
+		m.refreshPrompt()
+		if msg.err != nil {
+			return m, tea.Println("mcp server error: " + msg.err.Error())
+		}
+		return m, tea.Println("mcp server stopped")
 	}
 	if m.mode == modeGrid {
 		var cmd tea.Cmd

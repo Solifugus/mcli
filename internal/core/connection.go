@@ -178,6 +178,23 @@ func (c *Core) Describe(ctx context.Context, name string) (adapter.ObjectDetail,
 	return c.conn.DescribeObject(ctx, name)
 }
 
+// SearchColumns finds columns whose name matches text across the current
+// database. It is a read-only schema query.
+func (c *Core) SearchColumns(ctx context.Context, text string) ([]adapter.ColumnRef, error) {
+	if c.conn == nil {
+		return nil, ErrNotConnected
+	}
+	return c.conn.SearchColumns(ctx, text)
+}
+
+// SearchViews finds views whose definition or name matches text.
+func (c *Core) SearchViews(ctx context.Context, text string) ([]adapter.ObjectRef, error) {
+	if c.conn == nil {
+		return nil, ErrNotConnected
+	}
+	return c.conn.SearchViews(ctx, text)
+}
+
 // RunQuery executes a row-returning statement. The caller owns the RowStream and
 // must Close it.
 func (c *Core) RunQuery(ctx context.Context, sql string) (adapter.RowStream, error) {

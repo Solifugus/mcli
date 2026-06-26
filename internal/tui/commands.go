@@ -90,6 +90,9 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `\edit`:
 		res, c := m.cmdEdit(args)
 		return res, runCmd(c)
+	case `\mcp`:
+		res, c := m.cmdMCP(args)
+		return res, runCmd(c)
 	case `\run`:
 		return m.cmdRun(args)
 	case `\readonly`:
@@ -543,6 +546,7 @@ func helpText() cmdResult {
 		`  \cat <name>                                   print a SQL file`,
 		`  \copy <old> <new> / \rename <old> <new>       copy or rename a file`,
 		`  \delete <name>                                delete a SQL file`,
+		`  \mcp serve                                    run the MCP server on this terminal's stdio`,
 		`  \help                                         this help`,
 		`  \quit                                         exit (also Ctrl-C / Ctrl-D)`,
 		``,
