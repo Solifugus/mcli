@@ -14,7 +14,7 @@ var replCommands = []string{
 var workspaceSubcommands = []string{"create", "delete", "list", "rename", "status"}
 
 // serverSubcommands are the second-token completions for \server.
-var serverSubcommands = []string{"list", "show"}
+var serverSubcommands = []string{"add", "edit", "list", "remove", "show", "test"}
 
 // listTargets are the second-token completions for \list.
 var listTargets = []string{"databases", "schemas", "tables", "views"}
@@ -90,8 +90,11 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 		if tokenIndex == 1 {
 			return serverSubcommands
 		}
-		if tokenIndex == 2 && subcommand == "show" {
-			return m.serverNames()
+		if tokenIndex == 2 {
+			switch subcommand {
+			case "show", "edit", "remove", "rm", "delete", "test":
+				return m.serverNames()
+			}
 		}
 	case `\list`:
 		if tokenIndex == 1 {

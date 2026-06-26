@@ -34,20 +34,18 @@ func (c *Core) Environment() string {
 	return c.servers.Servers[c.connServer].Environment
 }
 
-// Connect opens a connection to a configured server, resolving its password from
-// the configured source, and records the connection in the current workspace.
-func (c *Core) Connect(ctx context.Context, name string) error {
-	srv, ok := c.servers.Servers[name]
-	if !ok {
-		return fmt.Errorf("no server named %q (see \\server list)", name)
-	}
+// dialAdapter resolves a server's password, builds a fresh adapter, and connects
+// it — without touching the Core's live connection or the workspace. Both
+// Connect (which then adopts the adapter) and TestServer (which discards it)
+// share it so connection wiring lives in exactly one place.
+func (c *Core) dialAdapter(ctx context.Context, srv config.Server) (adapter.Adapter, error) {
 	ad, err := adapter.New(srv.Type)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	password, err := resolvePassword(srv)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	params := adapter.ConnectParams{
 		Host:             srv.Host,
@@ -59,6 +57,20 @@ func (c *Core) Connect(ctx context.Context, name string) error {
 		Params:           srv.Options,
 	}
 	if err := ad.Connect(ctx, params); err != nil {
+		return nil, err
+	}
+	return ad, nil
+}
+
+// Connect opens a connection to a configured server, resolving its password from
+// the configured source, and records the connection in the current workspace.
+func (c *Core) Connect(ctx context.Context, name string) error {
+	srv, ok := c.servers.Servers[name]
+	if !ok {
+		return fmt.Errorf("no server named %q (see \\server list)", name)
+	}
+	ad, err := c.dialAdapter(ctx, srv)
+	if err != nil {
 		return err
 	}
 

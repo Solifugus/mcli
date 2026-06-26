@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,7 +61,7 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `\enter`:
 		return m.cmdEnter(args), sync()
 	case `\server`:
-		return m.cmdServer(args), sync()
+		return m.cmdServer(args)
 	case `\connect`:
 		res, run := m.cmdConnect(args)
 		return res, async(run)
@@ -203,43 +204,144 @@ func (m *Model) cmdDisconnect() cmdResult {
 	return out("disconnected from " + server)
 }
 
-// cmdServer lists configured servers or shows one's details. It is read-only;
-// add/edit/remove/test arrive in Phase 7.
-func (m *Model) cmdServer(args []string) cmdResult {
+// cmdServer dispatches the \server subcommands: list/show are read-only; add and
+// edit launch the interactive wizard (an action prompt); remove is synchronous;
+// test connects in the background.
+func (m *Model) cmdServer(args []string) (cmdResult, action) {
 	sub := "list"
 	if len(args) > 0 {
 		sub = args[0]
 	}
 	switch sub {
 	case "list":
-		names := sortedServerNames(m.core.Servers())
-		if len(names) == 0 {
-			return out(`no servers configured — add one to ~/.mcli/servers.json (\server add arrives in Phase 7)`)
-		}
-		servers := m.core.Servers()
-		cur := m.core.ConnServer()
-		rows := make([][]string, 0, len(names))
-		for _, n := range names {
-			s := servers[n]
-			marker := " "
-			if n == cur {
-				marker = "*"
-			}
-			rows = append(rows, []string{marker, n, s.Type, orNone(s.Environment), serverTarget(s)})
-		}
-		return cmdResult{lines: renderTable([]string{"", "name", "type", "env", "target"}, rows)}
+		return m.serverList(), sync()
 	case "show":
 		if len(args) < 2 {
-			return out(`usage: \server show <name>`)
+			return out(`usage: \server show <name>`), sync()
 		}
 		s, ok := m.core.Servers()[args[1]]
 		if !ok {
-			return out("no server named " + args[1])
+			return out("no server named " + args[1]), sync()
 		}
-		return out(serverDetails(args[1], s)...)
+		return out(serverDetails(args[1], s)...), sync()
+	case "add":
+		return m.serverAdd(args[1:])
+	case "edit":
+		return m.serverEdit(args[1:])
+	case "remove", "rm", "delete":
+		return m.serverRemove(args[1:]), sync()
+	case "test":
+		return m.serverTest(args[1:])
 	default:
-		return out(`usage: \server list|show`)
+		return out(`usage: \server list|show|add|edit|remove|test`), sync()
 	}
+}
+
+func (m *Model) serverList() cmdResult {
+	names := sortedServerNames(m.core.Servers())
+	if len(names) == 0 {
+		return out(`no servers configured — \server add to create one`)
+	}
+	servers := m.core.Servers()
+	cur := m.core.ConnServer()
+	rows := make([][]string, 0, len(names))
+	for _, n := range names {
+		s := servers[n]
+		marker := " "
+		if n == cur {
+			marker = "*"
+		}
+		rows = append(rows, []string{marker, n, s.Type, orNone(s.Environment), serverTarget(s)})
+	}
+	return cmdResult{lines: renderTable([]string{"", "name", "type", "env", "target"}, rows)}
+}
+
+// serverAdd launches the add wizard. An optional name argument pre-sets the name
+// so that step is skipped.
+func (m *Model) serverAdd(rest []string) (cmdResult, action) {
+	name := ""
+	if len(rest) > 0 {
+		name = rest[0]
+		if _, exists := m.core.Server(name); exists {
+			return out("server " + name + " already exists (use \\server edit)"), sync()
+		}
+	}
+	fields := serverFields(config.Server{}, name == "")
+	done := func(m *Model, vals map[string]string) tea.Cmd {
+		nm := name
+		if nm == "" {
+			nm = vals["name"]
+		}
+		s, err := serverFromVals(vals)
+		if err != nil {
+			return tea.Println("error: " + err.Error())
+		}
+		if err := m.core.AddServer(nm, s); err != nil {
+			return tea.Println("error: " + err.Error())
+		}
+		return tea.Println("added server " + nm + " — \\connect " + nm + " to use it")
+	}
+	intro := "adding a server (Esc to cancel)"
+	return out(intro), action{prompt: m.formPrompt(fields, done)}
+}
+
+// serverEdit launches the edit wizard for an existing server, pre-filling the
+// current values as defaults.
+func (m *Model) serverEdit(rest []string) (cmdResult, action) {
+	if len(rest) < 1 {
+		return out(`usage: \server edit <name>`), sync()
+	}
+	name := rest[0]
+	existing, ok := m.core.Server(name)
+	if !ok {
+		return out("no server named " + name), sync()
+	}
+	fields := serverFields(existing, false)
+	done := func(m *Model, vals map[string]string) tea.Cmd {
+		s, err := serverFromVals(vals)
+		if err != nil {
+			return tea.Println("error: " + err.Error())
+		}
+		if err := m.core.EditServer(name, s); err != nil {
+			return tea.Println("error: " + err.Error())
+		}
+		return tea.Println("updated server " + name)
+	}
+	return out("editing " + name + " (Enter keeps the shown value; Esc cancels)"), action{prompt: m.formPrompt(fields, done)}
+}
+
+// formPrompt builds the first pending of a form without entering it (submit's
+// dispatcher calls startPrompt on the returned action.prompt).
+func (m *Model) formPrompt(fields []formField, done func(*Model, map[string]string) tea.Cmd) *pending {
+	probe := *m
+	probe.startForm(fields, map[string]string{}, done)
+	return probe.pending
+}
+
+func (m *Model) serverRemove(rest []string) cmdResult {
+	if len(rest) < 1 {
+		return out(`usage: \server remove <name>`)
+	}
+	name := rest[0]
+	if err := m.core.RemoveServer(name); err != nil {
+		return errOut(err)
+	}
+	return out("removed server " + name)
+}
+
+// serverTest connects to a server in the background and reports reachability.
+func (m *Model) serverTest(rest []string) (cmdResult, action) {
+	if len(rest) < 1 {
+		return out(`usage: \server test <name>`), sync()
+	}
+	name := rest[0]
+	c := m.core
+	return cmdResult{}, async(func(ctx context.Context) asyncResultMsg {
+		if err := c.TestServer(ctx, name); err != nil {
+			return asyncResultMsg{err: fmt.Errorf("%s: %w", name, err)}
+		}
+		return asyncResultMsg{lines: []string{name + ": connection OK"}}
+	})
 }
 
 // serverTarget renders a one-line connection target for the server list.
@@ -359,7 +461,7 @@ func helpText() cmdResult {
 		`commands:`,
 		`  \workspace list|create|rename|delete|status   manage workspaces`,
 		`  \enter <name>                                 switch workspace`,
-		`  \server list|show <name>                      list configured servers`,
+		`  \server list|show|add|edit|remove|test        manage configured servers`,
 		`  \connect <server>                             connect to a configured server`,
 		`  \disconnect                                   close the connection`,
 		`  use <database>                                switch current database`,
