@@ -36,17 +36,17 @@ func TestGridOpenViaCommand(t *testing.T) {
 	m := newTestModel(t)
 	m.width, m.height = 80, 24
 
-	// No result yet: \grid reports nothing and stays in REPL mode.
-	updated, _ := m.submitValue(`\grid`)
+	// No result yet: .grid reports nothing and stays in REPL mode.
+	updated, _ := m.submitValue(`.grid`)
 	if updated.mode != modeREPL {
-		t.Fatal("\\grid with no result should stay in REPL mode")
+		t.Fatal(".grid with no result should stay in REPL mode")
 	}
 
-	// With a result captured, \grid enters the grid mode.
+	// With a result captured, .grid enters the grid mode.
 	m.lastResult = sampleResult()
-	updated, _ = m.submitValue(`\grid`)
+	updated, _ = m.submitValue(`.grid`)
 	if updated.mode != modeGrid {
-		t.Fatalf("\\grid should enter grid mode; mode=%v", updated.mode)
+		t.Fatalf(".grid should enter grid mode; mode=%v", updated.mode)
 	}
 
 	// View renders the grid in alt-screen.
@@ -64,7 +64,7 @@ func TestGridOpenViaCommand(t *testing.T) {
 func TestQuitKeyExitsGrid(t *testing.T) {
 	m := newTestModel(t)
 	m.lastResult = sampleResult()
-	updated, _ := m.submitValue(`\grid`)
+	updated, _ := m.submitValue(`.grid`)
 	back, _ := updated.handleGridKey(tea.KeyPressMsg{Code: 'q'})
 	if back.(Model).mode != modeREPL {
 		t.Error("q should return to REPL mode")

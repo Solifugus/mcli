@@ -10,6 +10,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
+- **Post-Phase-10 additions:** `\clear` (clear the screen), `\ai help` (practical
+  per-subcommand examples), and an **SQL linter** (`\lint <file|current> [live]`
+  plus the `lint_sql` MCP tool). The linter lives in `internal/core/lint` so both
+  front-ends share it: static checks (safety/correctness via the classifier,
+  lexical syntax — unbalanced parens, unterminated literals/comments, unknown
+  leading keyword, JOIN-without-ON; style — SELECT *, trailing whitespace, tabs,
+  optional keyword casing), plus a connected `LiveLint` that EXPLAINs each query
+  for deep syntax/schema errors. New `safety.Mask` exposes the noise-blanking
+  scanner. Live-verified against `gbasic`: an unknown relation was caught by the
+  live check; a valid query produced none. Settings gained a `lint` block.
 - **Phase:** 10 complete. Built-in SQL editor landed: a new alt-screen
   `modeEditor` behind `"editor": "builtin"`, with live Chroma highlighting,
   insert/overwrite (INS/OVR cue), keyboard selection, OSC 52 copy, and — its
@@ -24,7 +34,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
   optional — deferred until the PK-aware DML it unlocks is wanted. Loose ends:
   live SQL Server round-trip (needs password); DB2 (needs a working driver);
   Anthropic key still out of credit (OpenAI funded + verified).
-- **Last updated:** 2026-06-26 (Phase 10 complete — built-in editor)
+- **Last updated:** 2026-06-26 (post-Phase-10: \clear, \ai help, SQL linter)
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
   auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
   Non-Postgres test DB creds are in the `test-databases` memory; MariaDB uses a

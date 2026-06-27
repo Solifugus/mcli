@@ -358,7 +358,7 @@ func (e *editorModel) View(running bool) string {
 	if e.dirty {
 		dirty = " *"
 	}
-	title := fmt.Sprintf(" \\edit %s%s   builtin · %s ", e.name, dirty, mode)
+	title := fmt.Sprintf(" .edit %s%s   builtin · %s ", e.name, dirty, mode)
 	b.WriteString(editorTitleStyle.Render(padCells(title, e.width)))
 	b.WriteByte('\n')
 

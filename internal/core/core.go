@@ -32,7 +32,7 @@ type Core struct {
 	dialect    adapter.Dialect
 
 	// readOnly is the runtime read-only toggle (seeded from settings, flipped by
-	// \readonly). It guards writes in RunStatement; see internal/core/safety.go.
+	// .readonly). It guards writes in RunStatement; see internal/core/safety.go.
 	readOnly bool
 }
 

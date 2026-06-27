@@ -72,39 +72,41 @@ mcli mcp serve       # run the headless stdio MCP server
 mcli help            # usage
 ```
 
-Inside the TUI, commands are backslash-prefixed; bare input is SQL run against
-the current connection. A typical first session:
+Inside the TUI, commands are dot-prefixed (e.g. `.connect`); bare input is SQL
+run against the current connection. A typical first session:
 
 ```text
-\server add               # register a server (interactive wizard)
-\connect myserver         # connect
+.server add               # register a server (interactive wizard)
+.connect myserver         # connect
 use mydb                  # switch database
-\list tables              # explore
+.list tables              # explore
 select * from customers   # run SQL — Enter executes
-\grid                     # open the last result in a scrollable grid
-\edit report              # edit a SQL file in $EDITOR
-\run report               # run it
-\export query report to out.csv   # export results
+.grid                     # open the last result in a scrollable grid
+.edit report              # edit a SQL file in $EDITOR
+.run report               # run it
+.export query report to out.csv   # export results
 ```
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `\workspace` / `\enter <name>` | Manage and switch workspaces |
-| `\server add/edit/remove/test` | Manage server definitions and passwords |
-| `\connect <name>` / `\disconnect` | Open or close a connection |
+| `.workspace` / `.enter <name>` | Manage and switch workspaces |
+| `.server add/edit/remove/test` | Manage server definitions and passwords |
+| `.connect <name>` / `.disconnect` | Open or close a connection |
 | `use <db>` | Switch the current database |
-| `\list databases\|schemas\|tables\|views` | Browse schema objects |
-| `\describe <table>` | Show columns, types, and keys |
+| `.list databases\|schemas\|tables\|views` | Browse schema objects |
+| `.describe <table>` | Show columns, types, and keys |
 | `<sql>` | Run SQL on the connection (Enter executes) |
-| `\grid` | Open the last result in a scrollable grid |
-| `\files` / `\edit` / `\run` / `\cat` / `\copy` / `\rename` / `\delete` | Workspace SQL files |
-| `\import` / `\export` | Load and save delimited / Excel / fixed-width files |
-| `\readonly [on\|off]` | Toggle the session read-only guard |
-| `\ai ask\|explain\|fix\|providers` | AI assistance |
-| `\mcp serve` | Run the MCP server on this terminal's stdio |
-| `\help` | Full command reference |
+| `.grid` | Open the last result in a scrollable grid |
+| `.files` / `.edit` / `.run` / `.cat` / `.copy` / `.rename` / `.delete` | Workspace SQL files |
+| `.lint <file\|current> [live]` | Check SQL for safety, syntax, and style issues |
+| `.import` / `.export` | Load and save delimited / Excel / fixed-width files |
+| `.readonly [on\|off]` | Toggle the session read-only guard |
+| `.ai ask\|explain\|fix\|providers` | AI assistance |
+| `.mcp serve` | Run the MCP server on this terminal's stdio |
+| `.clear` | Clear the screen |
+| `.help` | Full command reference |
 
 `Ctrl-C` cancels a running query (it does not quit the app); `Ctrl-D` quits.
 
@@ -115,7 +117,7 @@ applies to both front-ends:
 
 - **Dangerous-SQL detection** flags statements like `DROP`, `TRUNCATE`, and
   `DELETE`/`UPDATE` without a `WHERE`, and asks for confirmation.
-- **Read-only mode** (`\readonly on`) refuses any write.
+- **Read-only mode** (`.readonly on`) refuses any write.
 - **Production guards** can require confirmation for, or outright block,
   dangerous statements on servers marked as production.
 - Over MCP — where there is no human to prompt — a flagged statement is refused
@@ -124,6 +126,23 @@ applies to both front-ends:
 Passwords are never stored in plaintext by default. A server records only its
 password *source*: `prompt`, `env:VAR`, or the OS keyring (with `prompt`/`env:`
 always available as fallbacks on headless systems).
+
+## Linting
+
+`.lint <file|current> [live]` checks SQL without running it. The static pass needs
+no connection and covers three areas:
+
+- **Safety & correctness** — `DELETE`/`UPDATE` without a `WHERE`, `DROP`,
+  `TRUNCATE`, and a `JOIN` with no `ON`/`USING` (an accidental cross join).
+- **Syntax** — unbalanced parentheses, unterminated strings/comments, and
+  unrecognized leading keywords.
+- **Style** — `SELECT *`, trailing whitespace, tab indentation, and (optionally)
+  keyword casing. Configurable under `lint` in `settings.json`.
+
+Add `live` to also validate each query against the connected database — it asks
+the engine to `EXPLAIN` the statement, catching deep syntax errors and unknown
+tables or columns, dialect-correctly and without executing anything. The same
+checks are available to AI agents through the `lint_sql` MCP tool.
 
 ## AI assistance
 
@@ -135,7 +154,7 @@ environment, and schema, but it only ever *suggests* SQL — you review and run 
 
 ## MCP server
 
-`mcli mcp serve` (or `\mcp serve` from the TUI) runs a stdio
+`mcli mcp serve` (or `.mcp serve` from the TUI) runs a stdio
 [Model Context Protocol](https://modelcontextprotocol.io) server. Each tool is a
 thin wrapper over a core function — listing workspaces and servers, browsing and
 searching schema, reading/writing workspace SQL files, running queries, and

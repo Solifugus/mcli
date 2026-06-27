@@ -60,7 +60,7 @@ func (m *Model) startForm(fields []formField, vals map[string]string, done func(
 }
 
 // serverFields builds the wizard steps. existing seeds the defaults for an edit;
-// includeName adds a leading name step (used by \server add without an argument).
+// includeName adds a leading name step (used by .server add without an argument).
 func serverFields(existing config.Server, includeName bool) []formField {
 	port := ""
 	if existing.Port != 0 {

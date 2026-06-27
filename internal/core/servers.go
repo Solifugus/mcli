@@ -34,7 +34,7 @@ func (c *Core) AddServer(name string, s config.Server) error {
 		return err
 	}
 	if _, exists := c.servers.Servers[name]; exists {
-		return fmt.Errorf("server %q already exists (use \\server edit)", name)
+		return fmt.Errorf("server %q already exists (use .server edit)", name)
 	}
 	c.putServer(name, s)
 	if err := c.cfg.SaveServers(c.servers); err != nil {
@@ -68,7 +68,7 @@ func (c *Core) RemoveServer(name string) error {
 		return fmt.Errorf("no server named %q", name)
 	}
 	if name == c.connServer {
-		return fmt.Errorf("server %q is connected; \\disconnect first", name)
+		return fmt.Errorf("server %q is connected; .disconnect first", name)
 	}
 	delete(c.servers.Servers, name)
 	if err := c.cfg.SaveServers(c.servers); err != nil {

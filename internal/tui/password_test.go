@@ -17,9 +17,9 @@ func TestConnectPromptsForPassword(t *testing.T) {
 		t.Fatalf("AddServer: %v", err)
 	}
 
-	_, act := m.handleLine(`\connect pg`)
+	_, act := m.handleLine(`.connect pg`)
 	if act.async == nil {
-		t.Fatal("\\connect should produce a background op")
+		t.Fatal(".connect should produce a background op")
 	}
 	msg := act.async(context.Background())
 	if msg.pwPrompt == nil {
@@ -40,14 +40,14 @@ func TestConnectPromptsForPassword(t *testing.T) {
 	}
 }
 
-// TestSetPasswordPromptsMasked checks the \server set-password flow opens a
+// TestSetPasswordPromptsMasked checks the .server set-password flow opens a
 // masked prompt.
 func TestSetPasswordPromptsMasked(t *testing.T) {
 	m := newTestModel(t)
 	if err := m.core.AddServer("pg", config.Server{Type: "postgres"}); err != nil {
 		t.Fatalf("AddServer: %v", err)
 	}
-	_, act := m.handleLine(`\server set-password pg`)
+	_, act := m.handleLine(`.server set-password pg`)
 	if act.prompt == nil {
 		t.Fatal("set-password should open a prompt")
 	}

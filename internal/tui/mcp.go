@@ -15,13 +15,13 @@ import (
 // mcpDoneMsg is delivered when the in-TUI MCP server stops.
 type mcpDoneMsg struct{ err error }
 
-// cmdMCP handles `\mcp serve`: it suspends the TUI and runs the same stdio MCP
+// cmdMCP handles `.mcp serve`: it suspends the TUI and runs the same stdio MCP
 // server as `mcli mcp serve`, over the terminal's stdio, until the client
 // closes the stream (Ctrl-D) or the user interrupts (Ctrl-C). The server shares
 // this session's core, so it sees the current workspace and connection.
 func (m *Model) cmdMCP(args []string) (cmdResult, tea.Cmd) {
 	if len(args) < 1 || args[0] != "serve" {
-		return out(`usage: \mcp serve`), nil
+		return out(`usage: .mcp serve`), nil
 	}
 	exec := &mcpExec{core: m.core}
 	return out(

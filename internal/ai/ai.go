@@ -1,5 +1,5 @@
 // Package ai holds the OpenAI-compatible chat client and the context assembly
-// that mcli's \ai commands use. It is UI-agnostic — the core calls it, and both
+// that mcli's .ai commands use. It is UI-agnostic — the core calls it, and both
 // front-ends inherit the behavior. AI features are optional and never execute
 // SQL: a completion is text the user reads, copies, and runs deliberately.
 // See docs/mcli-design.md §9, §20.

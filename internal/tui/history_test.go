@@ -11,27 +11,27 @@ func submitLine(m *Model, line string) {
 
 func TestHistoryRingWalk(t *testing.T) {
 	m := newTestModel(t)
-	submitLine(m, `\workspace list`)
-	submitLine(m, `\help`)
+	submitLine(m, `.workspace list`)
+	submitLine(m, `.help`)
 
 	// Up walks newest → oldest.
 	m.historyPrev()
-	if got := m.input.Value(); got != `\help` {
-		t.Fatalf("first Up = %q, want \\help", got)
+	if got := m.input.Value(); got != `.help` {
+		t.Fatalf("first Up = %q, want .help", got)
 	}
 	m.historyPrev()
-	if got := m.input.Value(); got != `\workspace list` {
-		t.Fatalf("second Up = %q, want \\workspace list", got)
+	if got := m.input.Value(); got != `.workspace list` {
+		t.Fatalf("second Up = %q, want .workspace list", got)
 	}
 	// Further Up is clamped at the oldest entry.
 	m.historyPrev()
-	if got := m.input.Value(); got != `\workspace list` {
+	if got := m.input.Value(); got != `.workspace list` {
 		t.Fatalf("clamped Up = %q", got)
 	}
 	// Down walks back toward the live draft.
 	m.historyNext()
-	if got := m.input.Value(); got != `\help` {
-		t.Fatalf("Down = %q, want \\help", got)
+	if got := m.input.Value(); got != `.help` {
+		t.Fatalf("Down = %q, want .help", got)
 	}
 	m.historyNext()
 	if got := m.input.Value(); got != "" {
@@ -41,24 +41,24 @@ func TestHistoryRingWalk(t *testing.T) {
 
 func TestHistoryPreservesDraft(t *testing.T) {
 	m := newTestModel(t)
-	submitLine(m, `\help`)
+	submitLine(m, `.help`)
 
 	// Start typing a new line, then walk up and back down.
-	m.input.SetValue(`\workspace cre`)
+	m.input.SetValue(`.workspace cre`)
 	m.historyPrev()
-	if got := m.input.Value(); got != `\help` {
+	if got := m.input.Value(); got != `.help` {
 		t.Fatalf("Up = %q", got)
 	}
 	m.historyNext()
-	if got := m.input.Value(); got != `\workspace cre` {
+	if got := m.input.Value(); got != `.workspace cre` {
 		t.Fatalf("draft not restored: %q", got)
 	}
 }
 
 func TestHistorySkipsConsecutiveDuplicates(t *testing.T) {
 	m := newTestModel(t)
-	submitLine(m, `\help`)
-	submitLine(m, `\help`)
+	submitLine(m, `.help`)
+	submitLine(m, `.help`)
 	if len(m.history) != 1 {
 		t.Fatalf("history = %v, want one entry", m.history)
 	}

@@ -27,7 +27,7 @@ func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); retur
 
 // action is what submit should do after a command's immediate output. At most
 // one field is set: async for a cancellable background DB op, cmd for a one-shot
-// command (e.g. the \edit editor handoff), neither for a purely synchronous
+// command (e.g. the .edit editor handoff), neither for a purely synchronous
 // command.
 type action struct {
 	async   asyncRun
@@ -55,69 +55,93 @@ func gridAction() action      { return action{grid: true} }
 func (m *Model) handleLine(line string) (cmdResult, action) {
 	cmd, args := tokenize(line)
 	switch cmd {
-	case `\quit`, `\q`, `\exit`:
+	case `.quit`, `.q`, `.exit`:
 		return cmdResult{quit: true}, sync()
-	case `\help`:
+	case `.help`:
 		return helpText(), sync()
-	case `\workspace`:
+	case `.clear`, `.cls`:
+		return cmdResult{}, runCmd(clearScreenCmd())
+	case `.workspace`:
 		return m.cmdWorkspace(args), sync()
-	case `\enter`:
+	case `.enter`:
 		return m.cmdEnter(args), sync()
-	case `\server`:
+	case `.server`:
 		return m.cmdServer(args)
-	case `\connect`:
+	case `.connect`:
 		return m.cmdConnect(args)
-	case `\disconnect`:
+	case `.disconnect`:
 		return m.cmdDisconnect(), sync()
-	case `\list`:
+	case `.list`:
 		res, run := m.cmdList(args)
 		return res, async(run)
-	case `\describe`:
+	case `.describe`:
 		res, run := m.cmdDescribe(args)
 		return res, async(run)
 	case "use":
 		res, run := m.cmdUse(args)
 		return res, async(run)
-	case `\files`:
+	case `.files`:
 		return m.cmdFiles(), sync()
-	case `\cat`:
+	case `.cat`:
 		return m.cmdCat(args), sync()
-	case `\copy`:
+	case `.copy`:
 		return m.cmdCopy(args), sync()
-	case `\rename`:
+	case `.rename`:
 		return m.cmdRenameFile(args), sync()
-	case `\delete`:
+	case `.delete`:
 		return m.cmdDeleteFile(args), sync()
-	case `\edit`:
+	case `.edit`:
 		if m.core.Settings().Editor == "builtin" {
 			return m.cmdEditBuiltin(args)
 		}
 		res, c := m.cmdEdit(args)
 		return res, runCmd(c)
-	case `\mcp`:
+	case `.mcp`:
 		res, c := m.cmdMCP(args)
 		return res, runCmd(c)
-	case `\run`:
+	case `.run`:
 		return m.cmdRun(args)
-	case `\readonly`:
+	case `.lint`:
+		return m.cmdLint(args)
+	case `.readonly`:
 		return m.cmdReadonly(args), sync()
-	case `\ai`:
+	case `.ai`:
 		return m.cmdAI(args)
-	case `\grid`:
+	case `.grid`:
 		return cmdResult{}, gridAction()
-	case `\export`:
+	case `.export`:
 		res, run := m.cmdExport(args)
 		return res, async(run)
-	case `\import`:
+	case `.import`:
 		res, run := m.cmdImport(args)
 		return res, async(run)
 	default:
-		if strings.HasPrefix(cmd, `\`) {
-			return out("unknown command: " + cmd + " (try \\help)"), sync()
+		// Commands are dot-prefixed. A leading '.' (or a legacy '\') that matched
+		// no case is an unknown command, not SQL — no valid statement starts with
+		// either. Everything else is SQL, run against the connection (behind the
+		// guard).
+		if strings.HasPrefix(cmd, ".") || strings.HasPrefix(cmd, `\`) {
+			hint := ""
+			if strings.HasPrefix(cmd, `\`) {
+				hint = " (commands now start with '.', e.g. .help)"
+			} else {
+				hint = " (try .help)"
+			}
+			return out("unknown command: " + cmd + hint), sync()
 		}
-		// Bare input is SQL, run against the live connection (behind the guard).
 		return m.guardedSQL(line)
 	}
+}
+
+// clearScreenCmd clears the terminal for the inline REPL. tea.ClearScreen alone
+// is not enough: in inline (non-alt-screen) mode the renderer manages only the
+// prompt's own line, so it erases that line and nothing else. So we first write
+// the real terminal clear sequence with tea.Raw — ESC[H home, ESC[2J clear the
+// screen, ESC[3J clear the scrollback — and then issue tea.ClearScreen to force
+// the renderer to repaint the prompt at the top (it otherwise short-circuits the
+// redraw because the View content is unchanged).
+func clearScreenCmd() tea.Cmd {
+	return tea.Sequence(tea.Raw("\x1b[H\x1b[2J\x1b[3J"), tea.ClearScreen)
 }
 
 // cmdReadonly shows or toggles the session read-only guard (§17).
@@ -133,7 +157,7 @@ func (m *Model) cmdReadonly(args []string) cmdResult {
 		m.core.SetReadOnly(false)
 		return out("read-only mode off")
 	default:
-		return out(`usage: \readonly [on|off]`)
+		return out(`usage: .readonly [on|off]`)
 	}
 }
 
@@ -159,7 +183,7 @@ func (m *Model) cmdFiles() cmdResult {
 
 func (m *Model) cmdCat(args []string) cmdResult {
 	if len(args) < 1 {
-		return out(`usage: \cat <name>`)
+		return out(`usage: .cat <name>`)
 	}
 	content, err := m.core.ReadSQLFile(args[0])
 	if err != nil {
@@ -173,7 +197,7 @@ func (m *Model) cmdCat(args []string) cmdResult {
 
 func (m *Model) cmdCopy(args []string) cmdResult {
 	if len(args) < 2 {
-		return out(`usage: \copy <old> <new>`)
+		return out(`usage: .copy <old> <new>`)
 	}
 	if err := m.core.CopySQLFile(args[0], args[1]); err != nil {
 		return errOut(err)
@@ -183,7 +207,7 @@ func (m *Model) cmdCopy(args []string) cmdResult {
 
 func (m *Model) cmdRenameFile(args []string) cmdResult {
 	if len(args) < 2 {
-		return out(`usage: \rename <old> <new>`)
+		return out(`usage: .rename <old> <new>`)
 	}
 	if err := m.core.RenameSQLFile(args[0], args[1]); err != nil {
 		return errOut(err)
@@ -193,7 +217,7 @@ func (m *Model) cmdRenameFile(args []string) cmdResult {
 
 func (m *Model) cmdDeleteFile(args []string) cmdResult {
 	if len(args) < 1 {
-		return out(`usage: \delete <name>`)
+		return out(`usage: .delete <name>`)
 	}
 	if err := m.core.DeleteSQLFile(args[0]); err != nil {
 		return errOut(err)
@@ -214,7 +238,7 @@ func (m *Model) cmdDisconnect() cmdResult {
 	return out("disconnected from " + server)
 }
 
-// cmdServer dispatches the \server subcommands: list/show are read-only; add and
+// cmdServer dispatches the .server subcommands: list/show are read-only; add and
 // edit launch the interactive wizard (an action prompt); remove is synchronous;
 // test connects in the background.
 func (m *Model) cmdServer(args []string) (cmdResult, action) {
@@ -227,7 +251,7 @@ func (m *Model) cmdServer(args []string) (cmdResult, action) {
 		return m.serverList(), sync()
 	case "show":
 		if len(args) < 2 {
-			return out(`usage: \server show <name>`), sync()
+			return out(`usage: .server show <name>`), sync()
 		}
 		s, ok := m.core.Servers()[args[1]]
 		if !ok {
@@ -247,14 +271,14 @@ func (m *Model) cmdServer(args []string) (cmdResult, action) {
 	case "clear-password":
 		return m.serverClearPassword(args[1:]), sync()
 	default:
-		return out(`usage: \server list|show|add|edit|remove|test|set-password|clear-password`), sync()
+		return out(`usage: .server list|show|add|edit|remove|test|set-password|clear-password`), sync()
 	}
 }
 
 func (m *Model) serverList() cmdResult {
 	names := sortedServerNames(m.core.Servers())
 	if len(names) == 0 {
-		return out(`no servers configured — \server add to create one`)
+		return out(`no servers configured — .server add to create one`)
 	}
 	servers := m.core.Servers()
 	cur := m.core.ConnServer()
@@ -277,7 +301,7 @@ func (m *Model) serverAdd(rest []string) (cmdResult, action) {
 	if len(rest) > 0 {
 		name = rest[0]
 		if _, exists := m.core.Server(name); exists {
-			return out("server " + name + " already exists (use \\server edit)"), sync()
+			return out("server " + name + " already exists (use .server edit)"), sync()
 		}
 	}
 	fields := serverFields(config.Server{}, name == "")
@@ -293,7 +317,7 @@ func (m *Model) serverAdd(rest []string) (cmdResult, action) {
 		if err := m.core.AddServer(nm, s); err != nil {
 			return tea.Println("error: " + err.Error())
 		}
-		return tea.Println("added server " + nm + " — \\connect " + nm + " to use it")
+		return tea.Println("added server " + nm + " — .connect " + nm + " to use it")
 	}
 	intro := "adding a server (Esc to cancel)"
 	return out(intro), action{prompt: m.formPrompt(fields, done)}
@@ -303,7 +327,7 @@ func (m *Model) serverAdd(rest []string) (cmdResult, action) {
 // current values as defaults.
 func (m *Model) serverEdit(rest []string) (cmdResult, action) {
 	if len(rest) < 1 {
-		return out(`usage: \server edit <name>`), sync()
+		return out(`usage: .server edit <name>`), sync()
 	}
 	name := rest[0]
 	existing, ok := m.core.Server(name)
@@ -334,7 +358,7 @@ func (m *Model) formPrompt(fields []formField, done func(*Model, map[string]stri
 
 func (m *Model) serverRemove(rest []string) cmdResult {
 	if len(rest) < 1 {
-		return out(`usage: \server remove <name>`)
+		return out(`usage: .server remove <name>`)
 	}
 	name := rest[0]
 	if err := m.core.RemoveServer(name); err != nil {
@@ -347,7 +371,7 @@ func (m *Model) serverRemove(rest []string) cmdResult {
 // prompting for a password if the source requires it.
 func (m *Model) serverTest(rest []string) (cmdResult, action) {
 	if len(rest) < 1 {
-		return out(`usage: \server test <name>`), sync()
+		return out(`usage: .server test <name>`), sync()
 	}
 	name := rest[0]
 	c := m.core
@@ -378,7 +402,7 @@ func (m *Model) serverTest(rest []string) (cmdResult, action) {
 // keyring under the server name. Pair with password_source "keyring".
 func (m *Model) serverSetPassword(rest []string) (cmdResult, action) {
 	if len(rest) < 1 {
-		return out(`usage: \server set-password <name>`), sync()
+		return out(`usage: .server set-password <name>`), sync()
 	}
 	name := rest[0]
 	if _, ok := m.core.Server(name); !ok {
@@ -406,7 +430,7 @@ func (m *Model) serverSetPassword(rest []string) (cmdResult, action) {
 // serverClearPassword removes a server's keyring secret.
 func (m *Model) serverClearPassword(rest []string) cmdResult {
 	if len(rest) < 1 {
-		return out(`usage: \server clear-password <name>`)
+		return out(`usage: .server clear-password <name>`)
 	}
 	if err := m.core.DeleteServerPassword(rest[0]); err != nil {
 		return errOut(err)
@@ -429,7 +453,7 @@ func serverTarget(s config.Server) string {
 	return t
 }
 
-// serverDetails renders the per-field view for \server show. It never prints a
+// serverDetails renders the per-field view for .server show. It never prints a
 // password — only the password source.
 func serverDetails(name string, s config.Server) []string {
 	lines := []string{
@@ -462,7 +486,7 @@ func sortedServerNames(servers map[string]config.Server) []string {
 
 func (m *Model) cmdWorkspace(args []string) cmdResult {
 	if len(args) == 0 {
-		return out(`usage: \workspace list|create|rename|delete|status`)
+		return out(`usage: .workspace list|create|rename|delete|status`)
 	}
 	switch args[0] {
 	case "list":
@@ -482,7 +506,7 @@ func (m *Model) cmdWorkspace(args []string) cmdResult {
 		return res
 	case "create":
 		if len(args) < 2 {
-			return out(`usage: \workspace create <name>`)
+			return out(`usage: .workspace create <name>`)
 		}
 		if err := m.core.CreateWorkspace(args[1]); err != nil {
 			return errOut(err)
@@ -490,7 +514,7 @@ func (m *Model) cmdWorkspace(args []string) cmdResult {
 		return out("created workspace " + args[1])
 	case "rename":
 		if len(args) < 3 {
-			return out(`usage: \workspace rename <old> <new>`)
+			return out(`usage: .workspace rename <old> <new>`)
 		}
 		if err := m.core.RenameWorkspace(args[1], args[2]); err != nil {
 			return errOut(err)
@@ -498,7 +522,7 @@ func (m *Model) cmdWorkspace(args []string) cmdResult {
 		return out("renamed " + args[1] + " to " + args[2])
 	case "delete":
 		if len(args) < 2 {
-			return out(`usage: \workspace delete <name>`)
+			return out(`usage: .workspace delete <name>`)
 		}
 		if err := m.core.DeleteWorkspace(args[1]); err != nil {
 			return errOut(err)
@@ -512,13 +536,13 @@ func (m *Model) cmdWorkspace(args []string) cmdResult {
 			"database:  "+orNone(ws.CurrentDatabase),
 		)
 	default:
-		return out(`unknown \workspace subcommand: ` + args[0])
+		return out(`unknown .workspace subcommand: ` + args[0])
 	}
 }
 
 func (m *Model) cmdEnter(args []string) cmdResult {
 	if len(args) < 1 {
-		return out(`usage: \enter <workspace>`)
+		return out(`usage: .enter <workspace>`)
 	}
 	if err := m.core.Enter(args[0]); err != nil {
 		return errOut(err)
@@ -529,30 +553,32 @@ func (m *Model) cmdEnter(args []string) cmdResult {
 func helpText() cmdResult {
 	return out(
 		`commands:`,
-		`  \workspace list|create|rename|delete|status   manage workspaces`,
-		`  \enter <name>                                 switch workspace`,
-		`  \server list|show|add|edit|remove|test        manage configured servers`,
-		`  \server set-password|clear-password <name>    store/remove a keyring secret`,
-		`  \connect <server>                             connect to a configured server`,
-		`  \disconnect                                   close the connection`,
+		`  .workspace list|create|rename|delete|status   manage workspaces`,
+		`  .enter <name>                                 switch workspace`,
+		`  .server list|show|add|edit|remove|test        manage configured servers`,
+		`  .server set-password|clear-password <name>    store/remove a keyring secret`,
+		`  .connect <server>                             connect to a configured server`,
+		`  .disconnect                                   close the connection`,
 		`  use <database>                                switch current database`,
-		`  \list databases|schemas|tables|views          list objects`,
-		`  \describe <table>                             show columns`,
+		`  .list databases|schemas|tables|views          list objects`,
+		`  .describe <table>                             show columns`,
 		`  <sql>                                         run SQL on the connection`,
-		`  \readonly [on|off]                            show or toggle read-only guard`,
-		`  \ai ask <q>|explain <f|current>|fix <f|current>|providers   ask the AI assistant`,
-		`  \grid                                         open the last result in a scrollable grid`,
-		`  \export query <name>|table <name>|current to <path> [exact]   export to CSV/TSV/pipe/xlsx/fixed`,
-		`  \import <path> [sheet <name>|widths N,N,...] into <table>   load a delimited/xlsx/fixed file`,
-		`  \files                                        list workspace SQL files`,
-		`  \edit <name>                                  edit a SQL file ($EDITOR, or builtin editor)`,
-		`  \run <name>                                   run a SQL file`,
-		`  \cat <name>                                   print a SQL file`,
-		`  \copy <old> <new> / \rename <old> <new>       copy or rename a file`,
-		`  \delete <name>                                delete a SQL file`,
-		`  \mcp serve                                    run the MCP server on this terminal's stdio`,
-		`  \help                                         this help`,
-		`  \quit                                         exit (also Ctrl-C / Ctrl-D)`,
+		`  .readonly [on|off]                            show or toggle read-only guard`,
+		`  .ai ask <q>|explain <f|current>|fix <f|current>|providers|help   ask the AI assistant`,
+		`  .grid                                         open the last result in a scrollable grid`,
+		`  .export query <name>|table <name>|current to <path> [exact]   export to CSV/TSV/pipe/xlsx/fixed`,
+		`  .import <path> [sheet <name>|widths N,N,...] into <table>   load a delimited/xlsx/fixed file`,
+		`  .files                                        list workspace SQL files`,
+		`  .edit <name>                                  edit a SQL file ($EDITOR, or builtin editor)`,
+		`  .run <name>                                   run a SQL file`,
+		`  .lint <name|current> [live]                   check SQL for safety/syntax/style issues`,
+		`  .cat <name>                                   print a SQL file`,
+		`  .copy <old> <new> / .rename <old> <new>       copy or rename a file`,
+		`  .delete <name>                                delete a SQL file`,
+		`  .mcp serve                                    run the MCP server on this terminal's stdio`,
+		`  .clear                                        clear the screen`,
+		`  .help                                         this help`,
+		`  .quit                                         exit (also Ctrl-C / Ctrl-D)`,
 		``,
 		`Ctrl-C cancels a running query; Ctrl-D quits.`,
 	)

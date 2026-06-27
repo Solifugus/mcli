@@ -45,19 +45,19 @@ func TestGuardedSQLBlocksUnderReadOnly(t *testing.T) {
 
 func TestReadonlyCommand(t *testing.T) {
 	m := newTestModel(t)
-	if got := joinLines(dispatch(m, `\readonly`)); !strings.Contains(got, "off") {
-		t.Errorf("initial \\readonly = %q, want off", got)
+	if got := joinLines(dispatch(m, `.readonly`)); !strings.Contains(got, "off") {
+		t.Errorf("initial .readonly = %q, want off", got)
 	}
-	dispatch(m, `\readonly on`)
+	dispatch(m, `.readonly on`)
 	if !m.core.ReadOnly() {
-		t.Error("\\readonly on did not engage")
+		t.Error(".readonly on did not engage")
 	}
-	if got := joinLines(dispatch(m, `\readonly`)); !strings.Contains(got, "on") {
-		t.Errorf("\\readonly after on = %q, want on", got)
+	if got := joinLines(dispatch(m, `.readonly`)); !strings.Contains(got, "on") {
+		t.Errorf(".readonly after on = %q, want on", got)
 	}
-	dispatch(m, `\readonly off`)
+	dispatch(m, `.readonly off`)
 	if m.core.ReadOnly() {
-		t.Error("\\readonly off did not disengage")
+		t.Error(".readonly off did not disengage")
 	}
 }
 

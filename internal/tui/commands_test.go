@@ -31,9 +31,22 @@ func dispatch(m *Model, line string) cmdResult {
 
 func TestDispatchQuit(t *testing.T) {
 	m := newTestModel(t)
-	for _, in := range []string{`\quit`, `\q`, `\exit`} {
+	for _, in := range []string{`.quit`, `.q`, `.exit`} {
 		if r := dispatch(m, in); !r.quit {
 			t.Errorf("dispatch(%q) quit = false, want true", in)
+		}
+	}
+}
+
+func TestDispatchClear(t *testing.T) {
+	m := newTestModel(t)
+	for _, in := range []string{`.clear`, `.cls`} {
+		res, act := m.handleLine(in)
+		if len(res.lines) != 0 {
+			t.Errorf("%s: unexpected output %v", in, res.lines)
+		}
+		if act.cmd == nil {
+			t.Errorf("%s: expected a clear-screen command", in)
 		}
 	}
 }
@@ -64,13 +77,13 @@ func TestBareInputIsAsyncSQL(t *testing.T) {
 func TestConnectUsageAndUnknownServer(t *testing.T) {
 	m := newTestModel(t)
 	// Missing argument is a synchronous usage error (no runner).
-	if res, act := m.handleLine(`\connect`); act.async != nil || !strings.Contains(joinLines(res), "usage:") {
+	if res, act := m.handleLine(`.connect`); act.async != nil || !strings.Contains(joinLines(res), "usage:") {
 		t.Errorf("connect usage: res=%q async=%v", joinLines(res), act.async != nil)
 	}
 	// Unknown server errors when the runner executes.
-	_, act := m.handleLine(`\connect ghost`)
+	_, act := m.handleLine(`.connect ghost`)
 	if act.async == nil {
-		t.Fatal("expected a runner for \\connect <name>")
+		t.Fatal("expected a runner for .connect <name>")
 	}
 	if msg := act.async(context.Background()); msg.err == nil {
 		t.Error("connecting to unknown server should error")
@@ -80,29 +93,29 @@ func TestConnectUsageAndUnknownServer(t *testing.T) {
 func TestWorkspaceCreateListEnter(t *testing.T) {
 	m := newTestModel(t)
 
-	if r := dispatch(m, `\workspace create lending`); !strings.Contains(joinLines(r), "created workspace lending") {
+	if r := dispatch(m, `.workspace create lending`); !strings.Contains(joinLines(r), "created workspace lending") {
 		t.Fatalf("create: %q", joinLines(r))
 	}
 
 	// list shows default + lending, with default marked current.
-	r := dispatch(m, `\workspace list`)
+	r := dispatch(m, `.workspace list`)
 	got := joinLines(r)
 	if !strings.Contains(got, "* default") || !strings.Contains(got, "lending") {
 		t.Fatalf("list: %q", got)
 	}
 
 	// enter lending, then list marks lending current.
-	if r := dispatch(m, `\enter lending`); !strings.Contains(joinLines(r), "entered workspace lending") {
+	if r := dispatch(m, `.enter lending`); !strings.Contains(joinLines(r), "entered workspace lending") {
 		t.Fatalf("enter: %q", joinLines(r))
 	}
-	if !strings.Contains(joinLines(dispatch(m, `\workspace list`)), "* lending") {
+	if !strings.Contains(joinLines(dispatch(m, `.workspace list`)), "* lending") {
 		t.Fatalf("list after enter did not mark lending current")
 	}
 }
 
 func TestWorkspaceStatus(t *testing.T) {
 	m := newTestModel(t)
-	got := joinLines(dispatch(m, `\workspace status`))
+	got := joinLines(dispatch(m, `.workspace status`))
 	if !strings.Contains(got, "workspace: default") || !strings.Contains(got, "server:    (none)") {
 		t.Errorf("status: %q", got)
 	}
@@ -110,7 +123,7 @@ func TestWorkspaceStatus(t *testing.T) {
 
 func TestEnterUnknownWorkspaceErrors(t *testing.T) {
 	m := newTestModel(t)
-	if !strings.Contains(joinLines(dispatch(m, `\enter ghost`)), "error:") {
+	if !strings.Contains(joinLines(dispatch(m, `.enter ghost`)), "error:") {
 		t.Error("entering unknown workspace should report an error")
 	}
 }
@@ -118,12 +131,12 @@ func TestEnterUnknownWorkspaceErrors(t *testing.T) {
 func TestWorkspaceUsageMessages(t *testing.T) {
 	m := newTestModel(t)
 	cases := map[string]string{
-		`\workspace`:               "usage:",
-		`\workspace create`:        "usage:",
-		`\workspace rename only`:   "usage:",
-		`\workspace delete`:        "usage:",
-		`\enter`:                   "usage:",
-		`\workspace frobnicate`:    "unknown",
+		`.workspace`:               "usage:",
+		`.workspace create`:        "usage:",
+		`.workspace rename only`:   "usage:",
+		`.workspace delete`:        "usage:",
+		`.enter`:                   "usage:",
+		`.workspace frobnicate`:    "unknown",
 	}
 	for in, want := range cases {
 		if got := joinLines(dispatch(m, in)); !strings.Contains(got, want) {
@@ -134,7 +147,7 @@ func TestWorkspaceUsageMessages(t *testing.T) {
 
 func TestServerListEmpty(t *testing.T) {
 	m := newTestModel(t) // temp dir has no servers.json
-	if got := joinLines(dispatch(m, `\server list`)); !strings.Contains(got, "no servers configured") {
+	if got := joinLines(dispatch(m, `.server list`)); !strings.Contains(got, "no servers configured") {
 		t.Errorf("server list (empty) = %q", got)
 	}
 }
@@ -158,12 +171,12 @@ func TestServerListAndShow(t *testing.T) {
 	mm := New(c)
 	m := &mm
 
-	list := joinLines(dispatch(m, `\server list`))
+	list := joinLines(dispatch(m, `.server list`))
 	if !strings.Contains(list, "local_pg") || !strings.Contains(list, "postgres") || !strings.Contains(list, "localhost:5432/app") {
 		t.Errorf("server list = %q", list)
 	}
 
-	show := joinLines(dispatch(m, `\server show local_pg`))
+	show := joinLines(dispatch(m, `.server show local_pg`))
 	if !strings.Contains(show, "user:     me") || !strings.Contains(show, "password: env:PG_PW") {
 		t.Errorf("server show = %q", show)
 	}
@@ -182,9 +195,9 @@ func TestConnectNoArgListsServers(t *testing.T) {
 	}})
 	c, _ := core.Open(root)
 	mm := New(c)
-	res, act := mm.handleLine(`\connect`)
+	res, act := mm.handleLine(`.connect`)
 	if act.async != nil {
-		t.Error("bare \\connect should be synchronous")
+		t.Error("bare .connect should be synchronous")
 	}
 	got := joinLines(res)
 	if !strings.Contains(got, "alpha") || !strings.Contains(got, "beta") {

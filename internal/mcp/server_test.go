@@ -229,3 +229,26 @@ func TestWriteThenReadWorkspaceFile(t *testing.T) {
 		t.Errorf("read back %q, want the written content", text)
 	}
 }
+
+func TestLintSQLTool(t *testing.T) {
+	resps := drive(t, call("lint_sql", map[string]any{"sql": "delete from users"}))
+	text, isErr := toolText(t, resps[0])
+	if isErr {
+		t.Fatalf("lint_sql reported an error: %s", text)
+	}
+	// The findings are a JSON array; the dangerous DELETE must appear.
+	if !strings.Contains(text, "dangerous-sql") {
+		t.Errorf("lint_sql output missing the dangerous-sql finding: %s", text)
+	}
+}
+
+func TestLintSQLToolClean(t *testing.T) {
+	resps := drive(t, call("lint_sql", map[string]any{"sql": "select id, name from t where id = 1"}))
+	text, isErr := toolText(t, resps[0])
+	if isErr {
+		t.Fatalf("lint_sql reported an error: %s", text)
+	}
+	if strings.Contains(text, "dangerous-sql") || strings.Contains(text, "select-star") {
+		t.Errorf("clean SQL should have no safety/style findings: %s", text)
+	}
+}

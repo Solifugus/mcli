@@ -124,7 +124,7 @@ func (a *Adapter) ListDatabases(ctx context.Context) ([]string, error) {
 }
 
 // ListSchemas returns the same set as ListDatabases: in MySQL the two are
-// synonyms, so this keeps \list schemas meaningful without inventing a layer.
+// synonyms, so this keeps .list schemas meaningful without inventing a layer.
 func (a *Adapter) ListSchemas(ctx context.Context) ([]string, error) {
 	return a.ListDatabases(ctx)
 }

@@ -158,9 +158,9 @@ func newBuiltinModel(t *testing.T) *Model {
 
 func TestEditRoutesToBuiltin(t *testing.T) {
 	m := newBuiltinModel(t)
-	_, act := m.handleLine(`\edit demo`)
+	_, act := m.handleLine(`.edit demo`)
 	if act.editor == nil {
-		t.Fatal(`\edit with editor=builtin should return an editor action`)
+		t.Fatal(`.edit with editor=builtin should return an editor action`)
 	}
 	if act.editor.name != "demo" {
 		t.Errorf("editor name = %q, want demo", act.editor.name)
@@ -175,7 +175,7 @@ func feedKey(t *testing.T, m *Model, k tea.KeyPressMsg) {
 
 func TestEditorCtrlSWritesFile(t *testing.T) {
 	m := newBuiltinModel(t)
-	_, act := m.handleLine(`\edit demo`)
+	_, act := m.handleLine(`.edit demo`)
 	m.mode = modeEditor
 	m.editor = *act.editor
 
@@ -200,7 +200,7 @@ func TestEditorCtrlSWritesFile(t *testing.T) {
 
 func TestEditorRunWithoutConnection(t *testing.T) {
 	m := newBuiltinModel(t)
-	_, act := m.handleLine(`\edit demo`)
+	_, act := m.handleLine(`.edit demo`)
 	m.mode = modeEditor
 	m.editor = *act.editor
 	for _, r := range "select 1" {
@@ -214,7 +214,7 @@ func TestEditorRunWithoutConnection(t *testing.T) {
 
 func TestEditorEscClosesCleanBuffer(t *testing.T) {
 	m := newBuiltinModel(t)
-	_, act := m.handleLine(`\edit demo`)
+	_, act := m.handleLine(`.edit demo`)
 	m.mode = modeEditor
 	m.editor = *act.editor // freshly opened, not dirty
 	feedKey(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})

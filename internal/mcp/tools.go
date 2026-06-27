@@ -434,6 +434,35 @@ func buildTools() []tool {
 			},
 		},
 
+		// --- linting ---
+		{
+			Name: "lint_sql",
+			Description: "Lint SQL for safety/correctness, lexical syntax, and style issues. Static; needs no connection and never executes the SQL. With live=true and a connection, also validates each query against the live database (deep syntax, unknown tables/columns) via EXPLAIN. Returns a JSON array of findings.",
+			Schema: objectSchema(map[string]any{
+				"sql":  strProp("the SQL to lint"),
+				"live": boolProp("also validate queries against the connected database (requires a connection)"),
+			}, "sql"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					SQL  string
+					Live bool
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if strings.TrimSpace(a.SQL) == "" {
+					return "", errors.New("sql is required")
+				}
+				findings := c.Lint(a.SQL)
+				if a.Live && c.Connected() {
+					if live, err := c.LiveLint(ctx, a.SQL); err == nil {
+						findings = append(findings, live...)
+					}
+				}
+				return jsonString(nonNil(findings))
+			},
+		},
+
 		// --- import / export ---
 		{
 			Name:        "export_query",

@@ -8,37 +8,37 @@ import (
 
 func TestCompleteCommandPrefix(t *testing.T) {
 	m := newTestModel(t)
-	// "\w" → unique "\workspace " (trailing space).
-	got, cand := m.complete(`\w`)
-	if got != `\workspace ` || cand != nil {
-		t.Errorf("complete(%q) = (%q, %v)", `\w`, got, cand)
+	// ".w" → unique ".workspace " (trailing space).
+	got, cand := m.complete(`.w`)
+	if got != `.workspace ` || cand != nil {
+		t.Errorf("complete(%q) = (%q, %v)", `.w`, got, cand)
 	}
 }
 
 func TestCompleteAmbiguousExtendsCommonPrefix(t *testing.T) {
 	m := newTestModel(t)
-	// "\" matches \enter \help \quit \workspace → no common prefix beyond "\",
-	// so the line is unchanged but candidates are listed.
-	got, cand := m.complete(`\`)
-	if got != `\` {
+	// "." matches every dot command → no common prefix beyond ".", so the line is
+	// unchanged but candidates are listed.
+	got, cand := m.complete(`.`)
+	if got != `.` {
 		t.Errorf("line changed unexpectedly: %q", got)
 	}
-	// "\" matches every backslash command (but not the bare "use").
+	// "." matches every dot command (but not the bare "use").
 	wantN := 0
 	for _, c := range replCommands {
-		if strings.HasPrefix(c, `\`) {
+		if strings.HasPrefix(c, `.`) {
 			wantN++
 		}
 	}
 	if len(cand) != wantN {
-		t.Errorf("candidates = %v, want %d backslash commands", cand, wantN)
+		t.Errorf("candidates = %v, want %d dot commands", cand, wantN)
 	}
 }
 
 func TestCompleteWorkspaceSubcommand(t *testing.T) {
 	m := newTestModel(t)
-	got, cand := m.complete(`\workspace cr`)
-	if got != `\workspace create ` || cand != nil {
+	got, cand := m.complete(`.workspace cr`)
+	if got != `.workspace create ` || cand != nil {
 		t.Errorf("got (%q, %v)", got, cand)
 	}
 }
@@ -48,10 +48,10 @@ func TestCompleteWorkspaceNamesForEnter(t *testing.T) {
 	if err := m.core.CreateWorkspace("lending"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// "\enter le" → unique "lending".
-	got, _ := m.complete(`\enter le`)
-	if got != `\enter lending ` {
-		t.Errorf("got %q, want %q", got, `\enter lending `)
+	// ".enter le" → unique "lending".
+	got, _ := m.complete(`.enter le`)
+	if got != `.enter lending ` {
+		t.Errorf("got %q, want %q", got, `.enter lending `)
 	}
 }
 
@@ -60,9 +60,9 @@ func TestCompleteWorkspaceNamesForDelete(t *testing.T) {
 	if err := m.core.CreateWorkspace("archive"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	got, _ := m.complete(`\workspace delete ar`)
-	if got != `\workspace delete archive ` {
-		t.Errorf("got %q, want %q", got, `\workspace delete archive `)
+	got, _ := m.complete(`.workspace delete ar`)
+	if got != `.workspace delete archive ` {
+		t.Errorf("got %q, want %q", got, `.workspace delete archive `)
 	}
 }
 
@@ -92,13 +92,13 @@ func TestCommonPrefix(t *testing.T) {
 }
 
 func TestReplaceLastToken(t *testing.T) {
-	if got := replaceLastToken(`\enter le`, false, "lending"); got != `\enter lending` {
+	if got := replaceLastToken(`.enter le`, false, "lending"); got != `.enter lending` {
 		t.Errorf("got %q", got)
 	}
-	if got := replaceLastToken(`\workspace `, true, "list"); got != `\workspace list` {
+	if got := replaceLastToken(`.workspace `, true, "list"); got != `.workspace list` {
 		t.Errorf("got %q", got)
 	}
-	if got := replaceLastToken(`\w`, false, `\workspace`); got != `\workspace` {
+	if got := replaceLastToken(`.w`, false, `.workspace`); got != `.workspace` {
 		t.Errorf("got %q", got)
 	}
 }

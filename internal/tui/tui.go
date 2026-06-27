@@ -31,7 +31,7 @@ const (
 // resume instead of being executed as a command. resume runs on the UI thread,
 // may mutate the model (e.g. set running state), may chain a follow-up prompt,
 // and returns the tea.Cmd to perform next. It is the foundation shared by
-// dangerous-SQL confirmation, password entry, and the \server add/edit wizard.
+// dangerous-SQL confirmation, password entry, and the .server add/edit wizard.
 type pending struct {
 	label  string // shown in place of the normal prompt
 	mask   bool   // render typed input as asterisks (passwords)
@@ -48,7 +48,7 @@ type Model struct {
 	quitting      bool
 
 	// Grid surface (alt-screen). lastResult is the most recent query result,
-	// openable with \grid.
+	// openable with .grid.
 	grid       gridModel
 	lastResult *resultSet
 
@@ -61,7 +61,7 @@ type Model struct {
 	editorRun  bool
 
 	// lastSQL/lastSQLErr track the most recent statement and any error it
-	// produced, so \ai explain current / \ai fix current have something to act on.
+	// produced, so .ai explain current / .ai fix current have something to act on.
 	lastSQL    string
 	lastSQLErr string
 
@@ -131,7 +131,7 @@ func Run(c *core.Core) error {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.input.Focus(),
-		tea.Println("mcli — type \\help for commands, \\quit to exit"),
+		tea.Println("mcli — type .help for commands, .quit to exit"),
 	)
 }
 
@@ -310,7 +310,7 @@ func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
 	if msg.result != nil {
 		m.lastResult = msg.result
 	}
-	if msg.isSQL { // record the outcome so \ai fix current can use the error
+	if msg.isSQL { // record the outcome so .ai fix current can use the error
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.lastSQLErr = msg.err.Error()
 		} else {
@@ -479,7 +479,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	case act.async != nil:
 		cmds = append(cmds, m.launchAsync(act.async))
 	case act.cmd != nil:
-		// One-shot command such as the \edit editor handoff (no cancel spinner).
+		// One-shot command such as the .edit editor handoff (no cancel spinner).
 		cmds = append(cmds, act.cmd)
 	default:
 		// A sync command may have changed the workspace; refresh the snapshot.

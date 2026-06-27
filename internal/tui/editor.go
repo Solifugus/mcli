@@ -22,7 +22,7 @@ type editDoneMsg struct {
 // cleanly. This is not a "mode" — it is a one-shot command.
 func (m *Model) cmdEdit(args []string) (cmdResult, tea.Cmd) {
 	if len(args) < 1 {
-		return out(`usage: \edit <name>`), nil
+		return out(`usage: .edit <name>`), nil
 	}
 	name := args[0]
 	path, err := m.core.SQLFilePath(name)
@@ -48,7 +48,7 @@ func (m *Model) cmdEdit(args []string) (cmdResult, tea.Cmd) {
 // that switches the model into modeEditor with the file loaded.
 func (m *Model) cmdEditBuiltin(args []string) (cmdResult, action) {
 	if len(args) < 1 {
-		return out(`usage: \edit <name>`), sync()
+		return out(`usage: .edit <name>`), sync()
 	}
 	name := args[0]
 	if err := m.core.EnsureSQLFile(name); err != nil {
@@ -63,7 +63,7 @@ func (m *Model) cmdEditBuiltin(args []string) (cmdResult, action) {
 }
 
 // resolveEditor determines the editor command (and any leading args) to launch
-// for \edit, per §11. The setting wins; then $VISUAL, $EDITOR, then a platform
+// for .edit, per §11. The setting wins; then $VISUAL, $EDITOR, then a platform
 // default. A multi-word setting like "code --wait" is split into command+args.
 // The "builtin" setting is reserved for the future internal editor (Phase 10).
 func resolveEditor(setting string) (cmd string, args []string, err error) {

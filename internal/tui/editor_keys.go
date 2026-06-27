@@ -109,7 +109,7 @@ func (m Model) editorRunStatement() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !m.core.Connected() {
-		m.editor.status = `not connected — use \connect first`
+		m.editor.status = `not connected — use .connect first`
 		return m, nil
 	}
 	m.lastSQL = sql

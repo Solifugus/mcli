@@ -7,27 +7,27 @@ import (
 
 func TestAIUsage(t *testing.T) {
 	m := newTestModel(t)
-	if got := joinLines(dispatch(m, `\ai`)); !strings.Contains(got, "usage") {
-		t.Errorf("\\ai with no args = %q, want usage", got)
+	if got := joinLines(dispatch(m, `.ai`)); !strings.Contains(got, "usage") {
+		t.Errorf(".ai with no args = %q, want usage", got)
 	}
-	if got := joinLines(dispatch(m, `\ai ask`)); !strings.Contains(got, "usage") {
-		t.Errorf("\\ai ask with no question = %q, want usage", got)
+	if got := joinLines(dispatch(m, `.ai ask`)); !strings.Contains(got, "usage") {
+		t.Errorf(".ai ask with no question = %q, want usage", got)
 	}
-	if got := joinLines(dispatch(m, `\ai bogus`)); !strings.Contains(got, "unknown") {
-		t.Errorf("\\ai bogus = %q, want unknown", got)
+	if got := joinLines(dispatch(m, `.ai bogus`)); !strings.Contains(got, "unknown") {
+		t.Errorf(".ai bogus = %q, want unknown", got)
 	}
 }
 
 func TestAIProvidersEmpty(t *testing.T) {
 	m := newTestModel(t)
-	if got := joinLines(dispatch(m, `\ai providers`)); !strings.Contains(got, "no AI providers") {
-		t.Errorf("\\ai providers (none) = %q", got)
+	if got := joinLines(dispatch(m, `.ai providers`)); !strings.Contains(got, "no AI providers") {
+		t.Errorf(".ai providers (none) = %q", got)
 	}
 }
 
 func TestAIExplainCurrentWithoutSQL(t *testing.T) {
 	m := newTestModel(t)
-	res, act := m.handleLine(`\ai explain current`)
+	res, act := m.handleLine(`.ai explain current`)
 	if act.async != nil {
 		t.Error("explain current with no prior SQL should not run a background op")
 	}
@@ -60,11 +60,25 @@ func TestAITargetSQLFile(t *testing.T) {
 }
 
 // TestLastSQLTracking confirms a submitted statement is remembered for
-// \ai explain current.
+// .ai explain current.
 func TestLastSQLTracking(t *testing.T) {
 	m := newTestModel(t)
 	m.handleLine("select * from t")
 	if m.lastSQL != "select * from t" {
 		t.Errorf("lastSQL = %q, want the submitted statement", m.lastSQL)
+	}
+}
+
+func TestAIHelpHasExamples(t *testing.T) {
+	m := newTestModel(t)
+	res, act := m.handleLine(`.ai help`)
+	if act.async != nil {
+		t.Error(`.ai help should be synchronous, not a network call`)
+	}
+	body := joinLines(res)
+	for _, want := range []string{`.ai ask`, `.ai explain current`, `.ai fix current`, "providers"} {
+		if !strings.Contains(body, want) {
+			t.Errorf(".ai help missing %q", want)
+		}
 	}
 }

@@ -102,9 +102,9 @@ func TestValidators(t *testing.T) {
 // primitive, verifying the server is created.
 func TestServerAddWizardFlow(t *testing.T) {
 	m := newTestModel(t)
-	res, act := m.handleLine(`\server add pg`)
+	res, act := m.handleLine(`.server add pg`)
 	if act.prompt == nil {
-		t.Fatalf("\\server add should start a wizard prompt; res=%v", res.lines)
+		t.Fatalf(".server add should start a wizard prompt; res=%v", res.lines)
 	}
 	m.startPrompt(*act.prompt)
 
@@ -140,7 +140,7 @@ func TestServerAddWizardFlow(t *testing.T) {
 // TestServerAddWizardCancel verifies Esc aborts without creating a server.
 func TestServerAddWizardCancel(t *testing.T) {
 	m := newTestModel(t)
-	_, act := m.handleLine(`\server add pg`)
+	_, act := m.handleLine(`.server add pg`)
 	if act.prompt == nil {
 		t.Fatal("expected wizard prompt")
 	}

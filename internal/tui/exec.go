@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/safety"
@@ -44,9 +46,9 @@ func (m *Model) cmdConnect(args []string) (cmdResult, action) {
 	if len(args) < 1 {
 		names := sortedServerNames(m.core.Servers())
 		if len(names) == 0 {
-			return out(`usage: \connect <server> — no servers configured (\server add)`), sync()
+			return out(`usage: .connect <server> — no servers configured (.server add)`), sync()
 		}
-		return out(`usage: \connect <server>`, "available: "+strings.Join(names, ", ")), sync()
+		return out(`usage: .connect <server>`, "available: "+strings.Join(names, ", ")), sync()
 	}
 	name := args[0]
 	c := m.core
@@ -89,7 +91,7 @@ func (m *Model) cmdUse(args []string) (cmdResult, asyncRun) {
 
 func (m *Model) cmdList(args []string) (cmdResult, asyncRun) {
 	if len(args) < 1 {
-		return out(`usage: \list databases|schemas|tables|views`), nil
+		return out(`usage: .list databases|schemas|tables|views`), nil
 	}
 	what := args[0]
 	c := m.core
@@ -106,17 +108,21 @@ func (m *Model) cmdList(args []string) (cmdResult, asyncRun) {
 			refs, err := c.ListViews(ctx)
 			return objectLines(refs, err)
 		default:
-			return asyncResultMsg{lines: []string{`unknown \list target: ` + what}}
+			return asyncResultMsg{lines: []string{`unknown .list target: ` + what}}
 		}
 	}
 }
 
 func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 	if len(args) < 1 {
-		return out(`usage: \describe <table>`), nil
+		return out(`usage: .describe <table>`), nil
 	}
 	name := args[0]
 	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
 	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
 		detail, err := c.Describe(ctx, name)
 		if err != nil {
@@ -130,22 +136,23 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 			}
 			rows = append(rows, []string{col.Name, col.DataType, null, col.Key})
 		}
-		return asyncResultMsg{lines: renderTable([]string{"column", "type", "nullable", "key"}, rows)}
+		lines, _ := renderResultTable([]string{"column", "type", "nullable", "key"}, rows, termWidth)
+		return asyncResultMsg{lines: lines}
 	}
 }
 
 // cmdExport writes a query, table, or the current result to a file (§16):
 //
-//	\export query <name> to <path>
-//	\export table <name> to <path>
-//	\export current to <path>
+//	.export query <name> to <path>
+//	.export table <name> to <path>
+//	.export current to <path>
 //
 // A trailing `exact` token (fixed-width .txt/.fix only) forces the two-pass
 // streaming export that measures every row before writing — nothing curtailed,
 // at the cost of running the query twice. Without it, fixed-width export buffers
 // up to 10000 rows and notes when the result is larger.
 func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
-	const usage = `usage: \export query <name>|table <name>|current to <path> [exact]`
+	const usage = `usage: .export query <name>|table <name>|current to <path> [exact]`
 	exact := false
 	if n := len(args); n > 0 && args[n-1] == "exact" {
 		exact = true
@@ -192,14 +199,14 @@ func (m *Model) cmdExport(args []string) (cmdResult, asyncRun) {
 
 // cmdImport loads a delimited, .xlsx, or fixed-width file into a table:
 //
-//	\import <path> into <table>
-//	\import <path> sheet <name> into <table>      (xlsx)
-//	\import <path> widths 10,20,8 into <table>    (fixed-width)
+//	.import <path> into <table>
+//	.import <path> sheet <name> into <table>      (xlsx)
+//	.import <path> widths 10,20,8 into <table>    (fixed-width)
 //
 // Fixed-width files carry no header, so `widths` is required and the comma-listed
 // field widths map positionally onto the table's columns in declared order.
 func (m *Model) cmdImport(args []string) (cmdResult, asyncRun) {
-	const usage = `usage: \import <path> [sheet <name>|widths N,N,...] into <table>`
+	const usage = `usage: .import <path> [sheet <name>|widths N,N,...] into <table>`
 	intoIdx := indexOf(args, "into")
 	if intoIdx < 1 || intoIdx == len(args)-1 {
 		return out(usage), nil
@@ -281,7 +288,7 @@ func indexOf(ss []string, want string) int {
 // enhancement.
 func (m *Model) cmdRun(args []string) (cmdResult, action) {
 	if len(args) < 1 {
-		return out(`usage: \run <name>`), sync()
+		return out(`usage: .run <name>`), sync()
 	}
 	content, err := m.core.ReadSQLFile(args[0])
 	if err != nil {
@@ -296,9 +303,9 @@ func (m *Model) cmdRun(args []string) (cmdResult, action) {
 // guardedSQL applies the safety policy (§17) to a statement before running it:
 // Block reports the reason and runs nothing, Confirm wraps the run in a yes/no
 // prompt, and Allow runs it as an ordinary background op. Every SQL entry point
-// (bare line and \run) funnels through here so the guard cannot be bypassed.
+// (bare line and .run) funnels through here so the guard cannot be bypassed.
 func (m *Model) guardedSQL(sql string) (cmdResult, action) {
-	m.lastSQL = sql // remember for \ai explain/fix current
+	m.lastSQL = sql // remember for .ai explain/fix current
 	runner := m.sqlRunner(sql)
 	switch act, _, reason := m.core.GuardStatement(sql); act {
 	case safety.Block:
@@ -315,6 +322,10 @@ func (m *Model) guardedSQL(sql string) (cmdResult, action) {
 func (m *Model) sqlRunner(sql string) asyncRun {
 	c := m.core
 	maxRows := m.core.Settings().MaxRowsDefault
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
 	return func(ctx context.Context) (res asyncResultMsg) {
 		defer func() { res.isSQL = true }() // tag every exit so lastSQLErr tracks SQL
 		if !isQuery(sql) {
@@ -361,17 +372,35 @@ func (m *Model) sqlRunner(sql string) asyncRun {
 			inline = rows[:maxRows]
 			inlineTrunc = true
 		}
-		lines := renderTable(cols, inline)
-		switch {
-		case capped:
-			lines = append(lines, fmt.Sprintf("(showing first %d of %d+ rows; \\grid to view, refine with LIMIT)", len(inline), len(rows)))
-		case inlineTrunc:
-			lines = append(lines, fmt.Sprintf("(showing first %d of %d rows; \\grid to view all)", maxRows, len(rows)))
-		default:
-			lines = append(lines, fmt.Sprintf("(%d row%s)", len(rows), plural(len(rows))))
-		}
+		lines, clipped := renderResultTable(cols, inline, termWidth)
+		lines = append(lines, resultSummary(len(rows), len(inline), maxRows, capped, inlineTrunc, clipped))
 		return asyncResultMsg{lines: lines, result: &resultSet{cols: cols, rows: rows, truncated: capped}}
 	}
+}
+
+// resultSummary builds the trailing one-line note under an inline result. It
+// states the row count (or how many of a larger set are shown), flags when
+// columns were clipped to the terminal width, and points at .grid whenever the
+// inline view is lossy — by row count or by width.
+func resultSummary(total, shown, maxRows int, capped, rowTrunc, clipped bool) string {
+	var rowNote string
+	switch {
+	case capped:
+		rowNote = fmt.Sprintf("first %d of %d+ rows", shown, total)
+	case rowTrunc:
+		rowNote = fmt.Sprintf("first %d of %d rows", maxRows, total)
+	default:
+		rowNote = fmt.Sprintf("%d row%s", total, plural(total))
+	}
+	note := "(" + rowNote
+	if clipped {
+		note += ", columns clipped to width"
+	}
+	note += ")"
+	if capped || rowTrunc || clipped {
+		note += " — .grid for the full view"
+	}
+	return note
 }
 
 // --- result formatting helpers ---
@@ -418,6 +447,115 @@ func toStrings(vals []any) []string {
 		}
 	}
 	return out
+}
+
+// resultColCap bounds how wide any single column may grow in the inline result
+// view, so one long text/JSON column can't push everything off-screen. The full,
+// untruncated values are always available in .grid.
+const resultColCap = 40
+
+// renderResultTable renders cols/rows as an aligned table that never wraps: each
+// column is capped at resultColCap, long cell values are truncated with '…', and
+// if a whole row is still wider than maxWidth it is clipped with a trailing '›'.
+// It reports clipped=true when anything was hidden, so the caller can point the
+// user at .grid. maxWidth <= 0 disables the row-width clip (unbounded).
+func renderResultTable(cols []string, rows [][]string, maxWidth int) (lines []string, clipped bool) {
+	n := len(cols)
+	widths := make([]int, n)
+	note := func(natural, capped int) int {
+		if natural > capped {
+			clipped = true
+			return capped
+		}
+		return natural
+	}
+	for i, c := range cols {
+		widths[i] = note(dispWidth(c), resultColCap)
+	}
+	for _, r := range rows {
+		for i := 0; i < n && i < len(r); i++ {
+			if w := note(dispWidth(r[i]), resultColCap); w > widths[i] {
+				widths[i] = w
+			}
+		}
+	}
+
+	render := func(cells []string) string {
+		parts := make([]string, n)
+		for i := 0; i < n; i++ {
+			v := ""
+			if i < len(cells) {
+				v = cells[i]
+			}
+			parts[i] = padTo(truncCell(v, widths[i]), widths[i])
+		}
+		line := strings.TrimRight(strings.Join(parts, "  "), " ")
+		if maxWidth > 0 && dispWidth(line) > maxWidth {
+			line = clipToWidth(line, maxWidth)
+			clipped = true
+		}
+		return line
+	}
+
+	lines = make([]string, 0, len(rows)+2)
+	lines = append(lines, render(cols))
+	seps := make([]string, n)
+	for i := range seps {
+		seps[i] = strings.Repeat("-", widths[i])
+	}
+	lines = append(lines, render(seps))
+	for _, r := range rows {
+		lines = append(lines, render(r))
+	}
+	return lines, clipped
+}
+
+// dispWidth is the rendered cell width of s (accounts for wide runes).
+func dispWidth(s string) int { return lipgloss.Width(s) }
+
+// truncCell shortens s to at most w display cells, marking a cut with '…'.
+func truncCell(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if dispWidth(s) <= w {
+		return s
+	}
+	return takeWidth(s, w-1) + "…"
+}
+
+// clipToWidth shortens a fully rendered line to w cells, marking the cut with '›'.
+func clipToWidth(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if dispWidth(s) <= w {
+		return s
+	}
+	return takeWidth(s, w-1) + "›"
+}
+
+// takeWidth returns the longest rune prefix of s whose width is at most w.
+func takeWidth(s string, w int) string {
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if used+rw > w {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	return b.String()
+}
+
+// padTo right-pads s with spaces to w display cells.
+func padTo(s string, w int) string {
+	if d := dispWidth(s); d < w {
+		return s + strings.Repeat(" ", w-d)
+	}
+	return s
 }
 
 func renderTable(cols []string, rows [][]string) []string {

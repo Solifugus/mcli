@@ -2,33 +2,33 @@ package tui
 
 import "strings"
 
-// replCommands are the commands offered by Tab completion. Aliases (\q, \exit)
+// replCommands are the commands offered by Tab completion. Aliases (.q, .exit)
 // still work but are intentionally not suggested.
 var replCommands = []string{
-	`\ai`, `\cat`, `\connect`, `\copy`, `\delete`, `\describe`, `\disconnect`,
-	`\edit`, `\enter`, `\export`, `\files`, `\grid`, `\help`, `\import`,
-	`\list`, `\mcp`, `\readonly`, `\run`, `\quit`, `\rename`, `\server`, `\workspace`, "use",
+	`.ai`, `.cat`, `.clear`, `.connect`, `.copy`, `.delete`, `.describe`, `.disconnect`,
+	`.edit`, `.enter`, `.export`, `.files`, `.grid`, `.help`, `.import`,
+	`.lint`, `.list`, `.mcp`, `.readonly`, `.run`, `.quit`, `.rename`, `.server`, `.workspace`, "use",
 }
 
-// aiSubcommands are the second-token completions for \ai.
-var aiSubcommands = []string{"ask", "explain", "fix", "providers"}
+// aiSubcommands are the second-token completions for .ai.
+var aiSubcommands = []string{"ask", "explain", "fix", "help", "providers"}
 
-// mcpSubcommands are the second-token completions for \mcp.
+// mcpSubcommands are the second-token completions for .mcp.
 var mcpSubcommands = []string{"serve"}
 
-// workspaceSubcommands are the second-token completions for \workspace.
+// workspaceSubcommands are the second-token completions for .workspace.
 var workspaceSubcommands = []string{"create", "delete", "list", "rename", "status"}
 
-// serverSubcommands are the second-token completions for \server.
+// serverSubcommands are the second-token completions for .server.
 var serverSubcommands = []string{"add", "clear-password", "edit", "list", "remove", "set-password", "show", "test"}
 
-// listTargets are the second-token completions for \list.
+// listTargets are the second-token completions for .list.
 var listTargets = []string{"databases", "schemas", "tables", "views"}
 
 // complete returns the line with the token under the (end-of-line) cursor
 // expanded, plus any candidate list to display when the completion is ambiguous.
 // It is context-aware: command names first, then workspace subcommands and
-// workspace names. Workspace-file completion arrives with \edit/\run in Phase 4.
+// workspace names. Workspace-file completion arrives with .edit/.run in Phase 4.
 func (m *Model) complete(line string) (newLine string, candidates []string) {
 	endsWithSpace := strings.HasSuffix(line, " ")
 	fields := strings.Fields(line)
@@ -77,22 +77,22 @@ func (m *Model) complete(line string) (newLine string, candidates []string) {
 // the given command. tokenIndex 1 is the first argument.
 func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []string {
 	switch cmd {
-	case `\enter`:
+	case `.enter`:
 		if tokenIndex == 1 {
 			return m.workspaceNames()
 		}
-	case `\workspace`:
+	case `.workspace`:
 		if tokenIndex == 1 {
 			return workspaceSubcommands
 		}
 		if tokenIndex == 2 && (subcommand == "rename" || subcommand == "delete") {
 			return m.workspaceNames()
 		}
-	case `\connect`:
+	case `.connect`:
 		if tokenIndex == 1 {
 			return m.serverNames()
 		}
-	case `\server`:
+	case `.server`:
 		if tokenIndex == 1 {
 			return serverSubcommands
 		}
@@ -102,26 +102,33 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 				return m.serverNames()
 			}
 		}
-	case `\ai`:
+	case `.ai`:
 		if tokenIndex == 1 {
 			return aiSubcommands
 		}
 		if tokenIndex == 2 && (subcommand == "explain" || subcommand == "fix") {
 			return append([]string{"current"}, m.sqlFileNames()...)
 		}
-	case `\list`:
+	case `.list`:
 		if tokenIndex == 1 {
 			return listTargets
 		}
-	case `\mcp`:
+	case `.mcp`:
 		if tokenIndex == 1 {
 			return mcpSubcommands
 		}
-	case `\edit`, `\run`, `\cat`, `\delete`:
+	case `.edit`, `.run`, `.cat`, `.delete`:
 		if tokenIndex == 1 {
 			return m.sqlFileNames()
 		}
-	case `\copy`, `\rename`:
+	case `.lint`:
+		if tokenIndex == 1 {
+			return append([]string{"current"}, m.sqlFileNames()...)
+		}
+		if tokenIndex == 2 {
+			return []string{"live"}
+		}
+	case `.copy`, `.rename`:
 		if tokenIndex == 1 { // complete the source file; the destination is new
 			return m.sqlFileNames()
 		}

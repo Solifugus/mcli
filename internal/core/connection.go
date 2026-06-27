@@ -13,7 +13,7 @@ import (
 )
 
 // ErrNotConnected is returned by database operations when no server is connected.
-var ErrNotConnected = errors.New("not connected to a server (use \\connect)")
+var ErrNotConnected = errors.New("not connected to a server (use .connect)")
 
 // Servers returns the configured server registry.
 func (c *Core) Servers() map[string]config.Server { return c.servers.Servers }
@@ -65,7 +65,7 @@ func (c *Core) dialAdapter(ctx context.Context, srv config.Server, password stri
 func (c *Core) Connect(ctx context.Context, name string) error {
 	srv, ok := c.servers.Servers[name]
 	if !ok {
-		return fmt.Errorf("no server named %q (see \\server list)", name)
+		return fmt.Errorf("no server named %q (see .server list)", name)
 	}
 	password, err := resolvePassword(name, srv)
 	if err != nil {
@@ -80,7 +80,7 @@ func (c *Core) Connect(ctx context.Context, name string) error {
 func (c *Core) ConnectWithPassword(ctx context.Context, name, password string) error {
 	srv, ok := c.servers.Servers[name]
 	if !ok {
-		return fmt.Errorf("no server named %q (see \\server list)", name)
+		return fmt.Errorf("no server named %q (see .server list)", name)
 	}
 	return c.adopt(ctx, name, srv, password)
 }

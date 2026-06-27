@@ -11,7 +11,7 @@ import (
 // (what interactive typing triggers) rather than calling dispatch directly.
 func TestSubmitPathCreatesWorkspace(t *testing.T) {
 	m := newTestModel(t)
-	m.input.SetValue(`\workspace create lending`)
+	m.input.SetValue(`.workspace create lending`)
 
 	updated, _ := m.submit()
 	rm := updated.(Model)
@@ -33,7 +33,7 @@ func TestSubmitPathCreatesWorkspace(t *testing.T) {
 // TestEnterKeyTriggersSubmit confirms handleKey routes Enter to submit.
 func TestEnterKeyTriggersSubmit(t *testing.T) {
 	m := newTestModel(t)
-	m.input.SetValue(`\workspace create viakey`)
+	m.input.SetValue(`.workspace create viakey`)
 
 	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	rm := updated.(Model)
@@ -83,29 +83,29 @@ func contains(ss []string, want string) bool {
 // typing. A model straight from New() (no manual Focus) must accept keys.
 func TestInputFocusedAfterNew(t *testing.T) {
 	var mdl tea.Model = *newTestModel(t) // no manual Focus()
-	for _, r := range `\help` {
+	for _, r := range `.help` {
 		mdl, _ = mdl.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	if got := mdl.(Model).input.Value(); got != `\help` {
+	if got := mdl.(Model).input.Value(); got != `.help` {
 		t.Fatalf("typing into a fresh model produced %q; input is not focused", got)
 	}
 }
 
 func TestTabKeyCompletes(t *testing.T) {
 	m := newTestModel(t)
-	m.input.SetValue(`\wo`)
+	m.input.SetValue(`.wo`)
 	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-	if got := updated.(Model).input.Value(); got != `\workspace ` {
-		t.Errorf("Tab completion = %q, want %q", got, `\workspace `)
+	if got := updated.(Model).input.Value(); got != `.workspace ` {
+		t.Errorf("Tab completion = %q, want %q", got, `.workspace `)
 	}
 }
 
 func TestUpKeyRecallsHistory(t *testing.T) {
 	m := newTestModel(t)
-	submitLine(m, `\help`)
+	submitLine(m, `.help`)
 	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyUp})
-	if got := updated.(Model).input.Value(); got != `\help` {
-		t.Errorf("Up recall = %q, want \\help", got)
+	if got := updated.(Model).input.Value(); got != `.help` {
+		t.Errorf("Up recall = %q, want .help", got)
 	}
 }
 

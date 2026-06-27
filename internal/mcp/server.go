@@ -33,7 +33,7 @@ type Server struct {
 
 // Serve runs the MCP server loop until the input stream closes (EOF) or ctx is
 // cancelled. It is used by both `mcli mcp serve` (over os.Stdin/os.Stdout) and
-// `\mcp serve` in the TUI (over the suspended terminal's stdio).
+// `.mcp serve` in the TUI (over the suspended terminal's stdio).
 func Serve(ctx context.Context, c *core.Core, in io.Reader, out io.Writer) error {
 	s := &Server{core: c, conn: newConn(in, out)}
 	return s.loop(ctx)

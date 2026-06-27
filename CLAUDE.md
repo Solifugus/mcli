@@ -32,7 +32,7 @@ The default build must stay pure-Go so cross-compilation is a plain GOOS/GOARCH 
 ```
 go build ./cmd/mcli              # interactive TUI (default run mode)
 mcli                             # launch TUI
-mcli mcp serve                   # headless stdio MCP server (same as \mcp serve in TUI)
+mcli mcp serve                   # headless stdio MCP server (same as .mcp serve in TUI)
 GOOS=windows GOARCH=amd64 go build ./cmd/mcli   # cross-compile, no CGo
 go test ./...                    # all tests
 go test ./internal/core/...      # one package tree
@@ -86,7 +86,7 @@ keys arrive as `tea.KeyPressMsg`, clipboard is OSC 52 via `tea.SetClipboard`/
 - The root model is a small **mode state machine** (`mode` field: `repl`, `grid`),
   one sub-model per surface, plus a handle to the core. `Update` routes by mode;
   `View` sets `AltScreen = true` only in `grid` mode.
-- The external editor is **not a mode** — `\edit` is a `tea.ExecProcess` round-trip
+- The external editor is **not a mode** — `.edit` is a `tea.ExecProcess` round-trip
   that suspends the program and returns to `repl` on exit.
 - `Update` is single-threaded: never block it. Every query, connection, and
   import/export runs as a `tea.Cmd` returning a `tea.Msg`, each carrying a
@@ -94,7 +94,7 @@ keys arrive as `tea.KeyPressMsg`, clipboard is OSC 52 via `tea.SetClipboard`/
   quit the app).
 - REPL rule: **Enter executes the current line** — single-line input, no
   statement-accumulation buffer, no terminating semicolon. Multi-line work lives
-  behind `\edit`; a paste containing newlines opens `\edit` pre-filled instead of
+  behind `.edit`; a paste containing newlines opens `.edit` pre-filled instead of
   firing as multiple partial executions.
 
 ### Safety guardrails live in the core
@@ -113,9 +113,11 @@ wrapper over a core function (design §21).
 - **Secrets:** never store plaintext passwords by default. Password sources are
   `prompt`, `env:VAR`, and `keyring` (`zalando/go-keyring`). Keyring fails on headless
   Linux without D-Bus, so `prompt`/`env:` must always remain available fallbacks.
-- **Commands** are backslash-prefixed (`\workspace`, `\connect`, `\edit`, `\run`,
-  `\import`, `\export`, `\ai`, `\mcp serve`), except `use <db>` which is bare. Full
-  command surface in design §12–§21.
+- **Commands** are dot-prefixed (`.workspace`, `.connect`, `.edit`, `.run`,
+  `.import`, `.export`, `.ai`, `.mcp serve`), except `use <db>` which is bare. (The
+  design doc §12–§21 still writes the legacy `\` prefix; the implementation uses
+  `.` — a leading `\` now reports as an unknown command.) Full command surface in
+  design §12–§21.
 - **Windows:** what matters for rendering is the terminal host, not the shell; Bubble
   Tea downsamples color automatically. The one place to code defensively is the
   external-editor handoff (resolution order: `editor` setting → `$VISUAL` → `$EDITOR`

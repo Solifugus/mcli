@@ -8,7 +8,7 @@ import (
 
 func TestExportUsage(t *testing.T) {
 	m := newTestModel(t)
-	for _, in := range []string{`\export`, `\export query`, `\export query x`, `\export bogus to f.csv`} {
+	for _, in := range []string{`.export`, `.export query`, `.export query x`, `.export bogus to f.csv`} {
 		res, act := m.handleLine(in)
 		if act.async != nil {
 			t.Errorf("%q should be a sync usage error, not async", in)
@@ -21,9 +21,9 @@ func TestExportUsage(t *testing.T) {
 
 func TestExportQueryProducesRunner(t *testing.T) {
 	m := newTestModel(t)
-	res, act := m.handleLine(`\export query report to exports/out.csv`)
+	res, act := m.handleLine(`.export query report to exports/out.csv`)
 	if act.async == nil {
-		t.Fatalf("\\export query should be async; res=%v", res.lines)
+		t.Fatalf(".export query should be async; res=%v", res.lines)
 	}
 	// No connection -> the runner reports an error rather than panicking.
 	if msg := act.async(context.Background()); msg.err == nil {
@@ -33,9 +33,9 @@ func TestExportQueryProducesRunner(t *testing.T) {
 
 func TestExportCurrentWithoutResult(t *testing.T) {
 	m := newTestModel(t)
-	_, act := m.handleLine(`\export current to exports/out.csv`)
+	_, act := m.handleLine(`.export current to exports/out.csv`)
 	if act.async == nil {
-		t.Fatal("\\export current should be async")
+		t.Fatal(".export current should be async")
 	}
 	if msg := act.async(context.Background()); msg.err == nil {
 		t.Error("export current with no result should error")
@@ -45,7 +45,7 @@ func TestExportCurrentWithoutResult(t *testing.T) {
 func TestExportCurrentWritesLastResult(t *testing.T) {
 	m := newTestModel(t)
 	m.lastResult = &resultSet{cols: []string{"id"}, rows: [][]string{{"1"}, {"2"}}}
-	_, act := m.handleLine(`\export current to exports/cur.csv`)
+	_, act := m.handleLine(`.export current to exports/cur.csv`)
 	msg := act.async(context.Background())
 	if msg.err != nil {
 		t.Fatalf("export current: %v", msg.err)
@@ -60,7 +60,7 @@ func TestExportCurrentWritesLastResult(t *testing.T) {
 
 func TestImportUsage(t *testing.T) {
 	m := newTestModel(t)
-	for _, in := range []string{`\import`, `\import f.csv`, `\import f.csv table t`} {
+	for _, in := range []string{`.import`, `.import f.csv`, `.import f.csv table t`} {
 		_, act := m.handleLine(in)
 		if act.async != nil {
 			t.Errorf("%q should be a sync usage error", in)
@@ -70,9 +70,9 @@ func TestImportUsage(t *testing.T) {
 
 func TestImportProducesRunner(t *testing.T) {
 	m := newTestModel(t)
-	_, act := m.handleLine(`\import data.csv into staging.members`)
+	_, act := m.handleLine(`.import data.csv into staging.members`)
 	if act.async == nil {
-		t.Fatal("\\import should be async")
+		t.Fatal(".import should be async")
 	}
 	if msg := act.async(context.Background()); msg.err == nil {
 		t.Error("import with no connection should error")
@@ -82,7 +82,7 @@ func TestImportProducesRunner(t *testing.T) {
 func TestExportCurrentFixedWidth(t *testing.T) {
 	m := newTestModel(t)
 	m.lastResult = &resultSet{cols: []string{"id", "name"}, rows: [][]string{{"1", "alice"}, {"100", "bo"}}}
-	_, act := m.handleLine(`\export current to exports/cur.txt`)
+	_, act := m.handleLine(`.export current to exports/cur.txt`)
 	msg := act.async(context.Background())
 	if msg.err != nil {
 		t.Fatalf("export current fixed: %v", msg.err)
@@ -103,23 +103,23 @@ func TestExportTruncatedNote(t *testing.T) {
 
 func TestExactKeywordStrippedFromExport(t *testing.T) {
 	m := newTestModel(t)
-	_, act := m.handleLine(`\export table members to out.txt exact`)
+	_, act := m.handleLine(`.export table members to out.txt exact`)
 	if act.async == nil {
-		t.Fatal("\\export ... exact should be async, not a usage error")
+		t.Fatal(".export ... exact should be async, not a usage error")
 	}
 }
 
 func TestImportWidthsParsing(t *testing.T) {
 	m := newTestModel(t)
 	// Bad widths -> sync error, never reaches an async runner.
-	_, act := m.handleLine(`\import f.txt widths 10,bad,8 into t`)
+	_, act := m.handleLine(`.import f.txt widths 10,bad,8 into t`)
 	if act.async != nil {
 		t.Error("invalid widths should be a sync error")
 	}
 	// Good widths -> async runner (errors only because there's no connection).
-	_, act = m.handleLine(`\import f.txt widths 10,20,8 into t`)
+	_, act = m.handleLine(`.import f.txt widths 10,20,8 into t`)
 	if act.async == nil {
-		t.Fatal("valid \\import ... widths should be async")
+		t.Fatal("valid .import ... widths should be async")
 	}
 }
 
