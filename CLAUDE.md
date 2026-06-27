@@ -4,17 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repository is **pre-implementation**. The only content today is the design
-specification at `docs/mcli-design.md`. There is no Go code, `go.mod`, build, or
-git history yet. When writing the first code, follow the architecture and module
-layout the design doc prescribes (summarized below) rather than inventing a new one,
-and read the relevant design section before implementing a feature — the doc is the
-contract.
+**Implemented and usable.** All ten built phases of the design's 11-phase plan are
+done — core + config, REPL shell, the pure-Go adapters (PostgreSQL, MySQL/MariaDB,
+SQL Server, Oracle; DB2 behind a tag), grid + SQL files + external editor,
+import/export, server management + safety hardening, AI assistance, the MCP server,
+and the built-in SQL editor. A static + live SQL linter (`.lint`) was added on top.
+Only Phase 11 (optional live-table grid editing) remains deferred. Follow the
+architecture and module layout the design doc prescribes (summarized below) rather
+than inventing a new one, and read the relevant design section before changing a
+feature — the doc remains the contract for *intent* (but see the prefix note under
+Conventions: the implementation uses `.`-prefixed commands, not the doc's `\`).
 
-**Track progress in `PLAN.md`.** It breaks the design's 11-phase plan into checkable
-tasks with a "Current status / next up" pointer at the top. Read it at the start of a
-session to see where things stand; tick boxes and update the pointer as work lands,
-and commit those changes alongside the code.
+**Track progress in `PLAN.md`.** It breaks the 11-phase plan into checkable tasks with
+a "Current status / next up" pointer at the top. Read it at the start of a session to
+see where things stand; tick boxes and update the pointer as work lands, and commit
+those changes alongside the code.
 
 ## What mcli is
 
@@ -25,7 +29,7 @@ restores its current server, current database, SQL files, import/export folders,
 history log when entered. Distribution target is a single self-contained binary that
 cross-compiles to Linux/macOS/Windows with no C toolchain.
 
-## Build & run (once code exists)
+## Build & run
 
 The default build must stay pure-Go so cross-compilation is a plain GOOS/GOARCH build:
 
@@ -114,10 +118,10 @@ wrapper over a core function (design §21).
   `prompt`, `env:VAR`, and `keyring` (`zalando/go-keyring`). Keyring fails on headless
   Linux without D-Bus, so `prompt`/`env:` must always remain available fallbacks.
 - **Commands** are dot-prefixed (`.workspace`, `.connect`, `.edit`, `.run`,
-  `.import`, `.export`, `.ai`, `.mcp serve`), except `use <db>` which is bare. (The
-  design doc §12–§21 still writes the legacy `\` prefix; the implementation uses
-  `.` — a leading `\` now reports as an unknown command.) Full command surface in
-  design §12–§21.
+  `.import`, `.export`, `.ai`, `.mcp serve`), except `use <db>` which is bare. A
+  leading `\` (the original design's prefix, since changed) reports as an unknown
+  command with a migration hint. Full command surface in design §12–§21 and the
+  in-app `.help`.
 - **Windows:** what matters for rendering is the terminal host, not the shell; Bubble
   Tea downsamples color automatically. The one place to code defensively is the
   external-editor handoff (resolution order: `editor` setting → `$VISUAL` → `$EDITOR`

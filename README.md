@@ -9,10 +9,11 @@ Enter a workspace and it restores your current server, current database, SQL
 files, import/export folders, and history log — so you can switch between
 unrelated tasks without losing your place.
 
-> **Status:** under active development. The interactive TUI, all default
-> database adapters, import/export, AI assistance, and the MCP server are
-> implemented. See [`PLAN.md`](PLAN.md) for phase-by-phase progress and
-> [`docs/mcli-design.md`](docs/mcli-design.md) for the full design.
+> **Status:** feature-complete and usable. The interactive TUI, all default
+> database adapters, import/export, AI assistance, the MCP server, the built-in
+> SQL editor, and the SQL linter are all implemented. The only deferred item is
+> optional live-table grid editing. See [`PLAN.md`](PLAN.md) for phase-by-phase
+> progress and [`docs/mcli-design.md`](docs/mcli-design.md) for the full design.
 
 ## Highlights
 
@@ -37,6 +38,9 @@ unrelated tasks without losing your place.
 - **Safety guardrails.** Dangerous-SQL detection, read-only mode, and
   production write guards live in the core, so the TUI and the MCP server
   inherit identical protection.
+- **SQL linter.** `.lint` checks statements for safety, syntax, and style
+  without running them; with a connection it also validates queries against the
+  live schema. Available in the TUI and as an MCP tool.
 - **AI assistance.** Ask questions, explain or fix SQL via any
   OpenAI-compatible endpoint (hosted or local). The AI never auto-executes SQL.
 - **MCP server.** Expose the same workspace, schema, query, and import/export
@@ -164,13 +168,13 @@ importing/exporting — all under the same safety controls as the TUI.
 
 One UI-agnostic core, two front-ends. The TUI and the MCP server are both thin
 clients of `internal/core`, which owns all domain logic — workspaces, the server
-registry, query execution, import/export, history, and the safety guardrails —
-so both front-ends inherit identical behavior.
+registry, query execution, import/export, history, the SQL linter, and the safety
+guardrails — so both front-ends inherit identical behavior.
 
 ```
 cmd/mcli/            entry point; selects TUI vs `mcp serve`
 internal/core/       UI-agnostic domain (workspace, server, adapter, query,
-                     transfer, history, safety, config)
+                     transfer, history, safety, lint, config)
 internal/adapters/   one package per database (postgres, mysql, mssql, oracle,
                      db2 [tagged])
 internal/tui/        Bubble Tea v2 front-end
