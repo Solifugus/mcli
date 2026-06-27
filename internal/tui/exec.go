@@ -123,6 +123,7 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 	if termWidth <= 0 {
 		termWidth = 80
 	}
+	color, dark := m.colorPrompt, m.darkBG
 	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
 		detail, err := c.Describe(ctx, name)
 		if err != nil {
@@ -137,7 +138,7 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 			rows = append(rows, []string{col.Name, col.DataType, null, col.Key})
 		}
 		lines, _ := renderResultTable([]string{"column", "type", "nullable", "key"}, rows, termWidth)
-		return asyncResultMsg{lines: lines}
+		return asyncResultMsg{lines: styleTable(lines, color, dark)}
 	}
 }
 
@@ -326,6 +327,7 @@ func (m *Model) sqlRunner(sql string) asyncRun {
 	if termWidth <= 0 {
 		termWidth = 80
 	}
+	color, dark := m.colorPrompt, m.darkBG
 	return func(ctx context.Context) (res asyncResultMsg) {
 		defer func() { res.isSQL = true }() // tag every exit so lastSQLErr tracks SQL
 		if !isQuery(sql) {
@@ -373,7 +375,12 @@ func (m *Model) sqlRunner(sql string) asyncRun {
 			inlineTrunc = true
 		}
 		lines, clipped := renderResultTable(cols, inline, termWidth)
-		lines = append(lines, resultSummary(len(rows), len(inline), maxRows, capped, inlineTrunc, clipped))
+		lines = styleTable(lines, color, dark)
+		summary := resultSummary(len(rows), len(inline), maxRows, capped, inlineTrunc, clipped)
+		if color {
+			summary = mutedStyle.Render(summary)
+		}
+		lines = append(lines, summary)
 		return asyncResultMsg{lines: lines, result: &resultSet{cols: cols, rows: rows, truncated: capped}}
 	}
 }
@@ -580,6 +587,41 @@ func renderTable(cols []string, rows [][]string) []string {
 		lines = append(lines, rowLine(r, widths))
 	}
 	return lines
+}
+
+// styleTable colors a plain table emitted by renderTable/renderResultTable: a
+// bold header, a dim separator rule, and a faint stripe on every other data row.
+// The stripe pads to the table's own widest line (not the terminal) so it reads
+// as a tidy block. Input lines are plain text, so a single wrapping Render per
+// line is safe — there are no nested resets to break the background. With color
+// off, the lines pass through untouched (keeping plain-output tests stable).
+func styleTable(lines []string, color, dark bool) []string {
+	if !color || len(lines) == 0 {
+		return lines
+	}
+	block := 0
+	for _, l := range lines {
+		if w := dispWidth(l); w > block {
+			block = w
+		}
+	}
+	stripe := lipgloss.NewStyle().Background(stripeColor(dark))
+	res := make([]string, len(lines))
+	res[0] = tableHeadStyle.Render(lines[0])
+	if len(lines) > 1 {
+		res[1] = tableRuleStyle.Render(lines[1])
+	}
+	for i := 2; i < len(lines); i++ {
+		line := lines[i]
+		if i%2 == 1 { // every other data row (rows start at index 2)
+			if pad := block - dispWidth(line); pad > 0 {
+				line += strings.Repeat(" ", pad)
+			}
+			line = stripe.Render(line)
+		}
+		res[i] = line
+	}
+	return res
 }
 
 func rowLine(cells []string, widths []int) string {

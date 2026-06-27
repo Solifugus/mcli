@@ -10,8 +10,8 @@ import (
 	"errors"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/adapter"
@@ -75,6 +75,11 @@ type Model struct {
 	// Color preferences from settings.
 	colorPrompt bool
 
+	// darkBG tracks the terminal's background lightness, queried at startup, so
+	// the alternating help stripe tints toward the right end of the spectrum.
+	// Defaults to true (the common case) until the terminal answers.
+	darkBG bool
+
 	// Background command state. While running, new submissions are refused and
 	// Ctrl-C cancels via cancel() instead of quitting.
 	running bool
@@ -95,7 +100,7 @@ func New(c *core.Core) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.SetVirtualCursor(true)
-	m := Model{core: c, mode: modeREPL, input: ti, colorPrompt: c.Settings().ColorPrompt}
+	m := Model{core: c, mode: modeREPL, input: ti, colorPrompt: c.Settings().ColorPrompt, darkBG: true}
 	// Focus here, not in Init: Init has a value receiver, so focusing there would
 	// only focus a discarded copy, leaving the real textinput unable to type.
 	m.input.Focus()
@@ -131,6 +136,7 @@ func Run(c *core.Core) error {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.input.Focus(),
+		tea.RequestBackgroundColor,
 		tea.Println("mcli — type .help for commands, .quit to exit"),
 	)
 }
@@ -148,6 +154,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeEditor {
 			m.editor.resize(msg.Width, msg.Height)
 		}
+		return m, nil
+	case tea.BackgroundColorMsg:
+		m.darkBG = msg.IsDark()
 		return m, nil
 	case tea.KeyPressMsg:
 		switch m.mode {

@@ -145,5 +145,5 @@ func (m *Model) aiProviders() cmdResult {
 		}
 		rows = append(rows, []string{marker, n, p.Model, base, orNone(p.APIKeySource)})
 	}
-	return cmdResult{lines: renderTable([]string{"", "name", "model", "base_url", "api_key"}, rows)}
+	return cmdResult{lines: styleTable(renderTable([]string{"", "name", "model", "base_url", "api_key"}, rows), m.colorPrompt, m.darkBG)}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/config"
@@ -21,8 +22,8 @@ type cmdResult struct {
 	quit  bool
 }
 
-func out(lines ...string) cmdResult      { return cmdResult{lines: lines} }
-func errOut(err error) cmdResult         { return cmdResult{lines: []string{"error: " + err.Error()}} }
+func out(lines ...string) cmdResult        { return cmdResult{lines: lines} }
+func errOut(err error) cmdResult           { return cmdResult{lines: []string{"error: " + err.Error()}} }
 func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); return r }
 
 // action is what submit should do after a command's immediate output. At most
@@ -58,7 +59,7 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `.quit`, `.q`, `.exit`:
 		return cmdResult{quit: true}, sync()
 	case `.help`:
-		return helpText(), sync()
+		return m.helpText(), sync()
 	case `.clear`, `.cls`:
 		return cmdResult{}, runCmd(clearScreenCmd())
 	case `.workspace`:
@@ -291,7 +292,7 @@ func (m *Model) serverList() cmdResult {
 		}
 		rows = append(rows, []string{marker, n, s.Type, orNone(s.Environment), serverTarget(s)})
 	}
-	return cmdResult{lines: renderTable([]string{"", "name", "type", "env", "target"}, rows)}
+	return cmdResult{lines: styleTable(renderTable([]string{"", "name", "type", "env", "target"}, rows), m.colorPrompt, m.darkBG)}
 }
 
 // serverAdd launches the add wizard. An optional name argument pre-sets the name
@@ -550,38 +551,170 @@ func (m *Model) cmdEnter(args []string) cmdResult {
 	return out("entered workspace " + args[0])
 }
 
-func helpText() cmdResult {
-	return out(
-		`commands:`,
-		`  .workspace list|create|rename|delete|status   manage workspaces`,
-		`  .enter <name>                                 switch workspace`,
-		`  .server list|show|add|edit|remove|test        manage configured servers`,
-		`  .server set-password|clear-password <name>    store/remove a keyring secret`,
-		`  .connect <server>                             connect to a configured server`,
-		`  .disconnect                                   close the connection`,
-		`  use <database>                                switch current database`,
-		`  .list databases|schemas|tables|views          list objects`,
-		`  .describe <table>                             show columns`,
-		`  <sql>                                         run SQL on the connection`,
-		`  .readonly [on|off]                            show or toggle read-only guard`,
-		`  .ai ask <q>|explain <f|current>|fix <f|current>|providers|help   ask the AI assistant`,
-		`  .grid                                         open the last result in a scrollable grid`,
-		`  .export query <name>|table <name>|current to <path> [exact]   export to CSV/TSV/pipe/xlsx/fixed`,
-		`  .import <path> [sheet <name>|widths N,N,...] into <table>   load a delimited/xlsx/fixed file`,
-		`  .files                                        list workspace SQL files`,
-		`  .edit <name>                                  edit a SQL file ($EDITOR, or builtin editor)`,
-		`  .run <name>                                   run a SQL file`,
-		`  .lint <name|current> [live]                   check SQL for safety/syntax/style issues`,
-		`  .cat <name>                                   print a SQL file`,
-		`  .copy <old> <new> / .rename <old> <new>       copy or rename a file`,
-		`  .delete <name>                                delete a SQL file`,
-		`  .mcp serve                                    run the MCP server on this terminal's stdio`,
-		`  .clear                                        clear the screen`,
-		`  .help                                         this help`,
-		`  .quit                                         exit (also Ctrl-C / Ctrl-D)`,
-		``,
-		`Ctrl-C cancels a running query; Ctrl-D quits.`,
+// helpEntry is one command line: a name, its argument syntax, and a description.
+type helpEntry struct{ name, args, desc string }
+
+// helpSection groups related commands under a heading.
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
+var helpSections = []helpSection{
+	{"Workspaces", []helpEntry{
+		{".workspace", "list|create|rename|delete|status", "manage workspaces"},
+		{".enter", "<name>", "switch workspace"},
+	}},
+	{"Servers & connections", []helpEntry{
+		{".server", "list|show|add|edit|remove|test", "manage configured servers"},
+		{".server", "set-password|clear-password <name>", "store/remove a keyring secret"},
+		{".connect", "<server>", "connect to a configured server"},
+		{".disconnect", "", "close the connection"},
+	}},
+	{"Databases & objects", []helpEntry{
+		{"use", "<database>", "switch current database"},
+		{".list", "databases|schemas|tables|views", "list objects"},
+		{".describe", "<table>", "show columns"},
+	}},
+	{"Running SQL", []helpEntry{
+		{"<sql>", "", "run SQL on the connection"},
+		{".readonly", "[on|off]", "show or toggle read-only guard"},
+		{".grid", "", "open the last result in a scrollable grid"},
+		{".lint", "<name|current> [live]", "check SQL for safety/syntax/style issues"},
+	}},
+	{"SQL files", []helpEntry{
+		{".files", "", "list workspace SQL files"},
+		{".edit", "<name>", "edit a SQL file ($EDITOR, or builtin editor)"},
+		{".run", "<name>", "run a SQL file"},
+		{".cat", "<name>", "print a SQL file"},
+		{".copy", "<old> <new>", "copy a file"},
+		{".rename", "<old> <new>", "rename a file"},
+		{".delete", "<name>", "delete a SQL file"},
+	}},
+	{"Import / export", []helpEntry{
+		{".export", "query <name>|table <name>|current to <path> [exact]", "export to CSV/TSV/pipe/xlsx/fixed"},
+		{".import", "<path> [sheet <name>|widths N,N,...] into <table>", "load a delimited/xlsx/fixed file"},
+	}},
+	{"AI assistant", []helpEntry{
+		{".ai", "ask <q>|explain <f|current>|fix <f|current>|providers|help", "ask the AI assistant"},
+	}},
+	{"System", []helpEntry{
+		{".mcp", "serve", "run the MCP server on this terminal's stdio"},
+		{".clear", "", "clear the screen"},
+		{".help", "", "this help"},
+		{".quit", "", "exit (also Ctrl-C / Ctrl-D)"},
+	}},
+}
+
+func (m *Model) helpText() cmdResult {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+
+	// Align descriptions to a common column, derived from the longest signature
+	// that is short enough to leave room for its description (the few very long
+	// signatures fall back to an inline gap rather than pushing the column out).
+	descCol := 0
+	for _, sec := range helpSections {
+		for _, e := range sec.entries {
+			if w := sigWidth(e); w <= 44 && w+2 > descCol {
+				descCol = w + 2
+			}
+		}
+	}
+	if descCol < 20 {
+		descCol = 20
+	}
+
+	var lines []string
+	for si, sec := range helpSections {
+		if si > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, m.styleIf(helpTitleStyle, sec.title))
+		for i, e := range sec.entries {
+			lines = append(lines, m.helpLine(e, descCol, width, i%2 == 1))
+		}
+	}
+	lines = append(lines,
+		"",
+		m.styleIf(helpFootStyle, "Ctrl-C cancels a running query; Ctrl-D quits."),
 	)
+	return out(lines...)
+}
+
+// sigWidth is the display width of an entry's "name args" signature.
+func sigWidth(e helpEntry) int {
+	w := len(e.name)
+	if e.args != "" {
+		w += 1 + len(e.args)
+	}
+	return w
+}
+
+// helpLine renders one command row: colored name, dimmed argument syntax, and
+// description aligned to descCol. Striped rows get a faint full-width background;
+// the stripe is built by concatenating per-segment styles (each carrying the
+// background) rather than wrapping, because lipgloss resets the background at the
+// end of every nested Render.
+func (m *Model) helpLine(e helpEntry, descCol, width int, striped bool) string {
+	if !m.colorPrompt {
+		sig := e.name
+		if e.args != "" {
+			sig += " " + e.args
+		}
+		line := "  " + sig
+		if e.desc != "" {
+			if w := sigWidth(e); w < descCol {
+				line += strings.Repeat(" ", descCol-w)
+			} else {
+				line += "  "
+			}
+			line += e.desc
+		}
+		return strings.TrimRight(line, " ")
+	}
+
+	nameSt, argSt, descSt := helpCmdStyle, helpArgStyle, helpDescStyle
+	padSt := lipgloss.NewStyle()
+	if striped {
+		bg := stripeColor(m.darkBG)
+		nameSt = nameSt.Background(bg)
+		argSt = argSt.Background(bg)
+		descSt = descSt.Background(bg)
+		padSt = padSt.Background(bg)
+	}
+
+	var b strings.Builder
+	b.WriteString("  ")
+	b.WriteString(nameSt.Render(e.name))
+	if e.args != "" {
+		b.WriteString(argSt.Render(" " + e.args))
+	}
+	if e.desc != "" {
+		gap := descCol - sigWidth(e)
+		if gap < 2 {
+			gap = 2
+		}
+		b.WriteString(padSt.Render(strings.Repeat(" ", gap)))
+		b.WriteString(descSt.Render(e.desc))
+	}
+	if striped {
+		if pad := width - lipgloss.Width(b.String()); pad > 0 {
+			b.WriteString(padSt.Render(strings.Repeat(" ", pad)))
+		}
+	}
+	return b.String()
+}
+
+// styleIf applies a style only when color output is enabled, so plain mode (and
+// the tests that assert on it) keeps unstyled text.
+func (m *Model) styleIf(st lipgloss.Style, s string) string {
+	if !m.colorPrompt {
+		return s
+	}
+	return st.Render(s)
 }
 
 // tokenize splits a line into a command token and whitespace-separated args.

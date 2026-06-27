@@ -31,6 +31,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
   the noise-blanking scanner. Live-verified against `gbasic`: an unknown relation was
   caught by the live check; a valid query produced none. Settings gained a `lint`
   block.
+- **Output coloring polish:** `.help` is now grouped into colored sections (magenta
+  headings, blue command names, dim argument syntax, aligned descriptions) with a
+  faint alternating stripe on every other row; the simple object tables (`.server
+  list`, `.ai providers`) and query/`.describe` results get a bold header, a dim
+  rule, and the same subtle row striping, plus a dimmed result summary. All of it is
+  gated on the existing `color_prompt` setting (plain text when off). The stripe
+  background adapts to the terminal's light/dark background (queried at startup via
+  `tea.RequestBackgroundColor`); styles live in `internal/tui/style.go`.
 - **Phase:** 10 complete. Built-in SQL editor landed: a new alt-screen
   `modeEditor` behind `"editor": "builtin"`, with live Chroma highlighting,
   insert/overwrite (INS/OVR cue), keyboard selection, OSC 52 copy, and — its
@@ -48,8 +56,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - **Beyond the plan:** future directions (lineage/search as TUI commands, analysis
   features, another import format, and a GUI front-end) are captured in
   [`docs/roadmap.md`](docs/roadmap.md) — intent only, nothing scheduled.
-- **Last updated:** 2026-06-26 (real-use ready: `.`-prefix, width-aware results,
-  `.clear`/`.ai help`/SQL linter; all docs synced)
+- **Last updated:** 2026-06-27 (output coloring polish: grouped/colored `.help`,
+  colored table headers + subtle row striping, background-adaptive stripe)
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
   auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
   Non-Postgres test DB creds are in the `test-databases` memory; MariaDB uses a
