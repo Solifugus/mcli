@@ -41,10 +41,13 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
   extracted `renderLineSpans`. Live-verified against `gbasic`: a `SELECT` ran from
   the editor into the grid with real rows; a `DELETE` without `WHERE` was gated by
   the confirm prompt. Phases 1–10 done.
-- **Next up:** only Phase 11 (live-table grid editing) remains, and it is
-  optional — deferred until the PK-aware DML it unlocks is wanted. Loose ends:
+- **Next up:** only Phase 11 (live-table grid editing) remains in the plan, and it
+  is optional — deferred until the PK-aware DML it unlocks is wanted. Loose ends:
   live SQL Server round-trip (needs password); DB2 (needs a working driver);
   Anthropic key still out of credit (OpenAI funded + verified).
+- **Beyond the plan:** future directions (lineage/search as TUI commands, analysis
+  features, another import format, and a GUI front-end) are captured in
+  [`docs/roadmap.md`](docs/roadmap.md) — intent only, nothing scheduled.
 - **Last updated:** 2026-06-26 (real-use ready: `.`-prefix, width-aware results,
   `.clear`/`.ai help`/SQL linter; all docs synced)
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`

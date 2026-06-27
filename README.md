@@ -13,7 +13,9 @@ unrelated tasks without losing your place.
 > database adapters, import/export, AI assistance, the MCP server, the built-in
 > SQL editor, and the SQL linter are all implemented. The only deferred item is
 > optional live-table grid editing. See [`PLAN.md`](PLAN.md) for phase-by-phase
-> progress and [`docs/mcli-design.md`](docs/mcli-design.md) for the full design.
+> progress, [`docs/mcli-design.md`](docs/mcli-design.md) for the full design, and
+> [`docs/roadmap.md`](docs/roadmap.md) for future directions (lineage, analysis,
+> and a possible GUI front-end).
 
 ## Highlights
 
