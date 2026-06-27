@@ -58,12 +58,23 @@ type Settings struct {
 	ConfirmDangerousSQL bool   `json:"confirm_dangerous_sql"`
 	Editor              string `json:"editor"`
 	// Safety guardrails (design §17). ReadOnly starts the session refusing any
-	// non-read statement; it is also togglable at runtime via \readonly.
+	// non-read statement; it is also togglable at runtime via .readonly.
 	// BlockDangerousOnProd upgrades the prod confirmation to an outright refusal.
 	// DangerousSQL overrides the built-in dangerous-keyword list when non-empty.
 	ReadOnly             bool     `json:"read_only"`
 	BlockDangerousOnProd bool     `json:"block_dangerous_on_prod"`
 	DangerousSQL         []string `json:"dangerous_sql,omitempty"`
+	// Lint configures the .lint command and the lint_sql MCP tool.
+	Lint LintConfig `json:"lint"`
+}
+
+// LintConfig tunes the static SQL linter. Safety/correctness and lexical syntax
+// checks always run; Style gates the convention rules. KeywordCase, when "upper"
+// or "lower" (and Style is on), flags keywords not in that case; empty leaves
+// casing unchecked.
+type LintConfig struct {
+	Style       bool   `json:"style"`
+	KeywordCase string `json:"keyword_case,omitempty"`
 }
 
 // DefaultSettings returns the documented defaults used on first run.
@@ -74,6 +85,7 @@ func DefaultSettings() Settings {
 		MaxRowsDefault:      500,
 		ConfirmDangerousSQL: true,
 		Editor:              "auto",
+		Lint:                LintConfig{Style: true},
 	}
 }
 

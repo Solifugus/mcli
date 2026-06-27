@@ -119,7 +119,7 @@ func (p Policy) Decide(v Verdict, env string) (Action, string) {
 	prod := strings.EqualFold(env, "prod") || strings.EqualFold(env, "production")
 
 	if p.ReadOnly && !v.ReadOnly {
-		return Block, "read-only mode is on — only read-only statements are allowed (\\readonly off to disable)"
+		return Block, "read-only mode is on — only read-only statements are allowed (.readonly off to disable)"
 	}
 	if v.Dangerous {
 		why := strings.Join(v.Reasons, ", ")
@@ -202,6 +202,14 @@ func blankNoise(s string) string {
 	return b.String()
 }
 
+// Mask blanks the contents of string literals, quoted identifiers, and comments
+// (replacing their bytes with spaces while preserving structure and length), so
+// callers can scan SQL structure — parentheses, keywords, clause boundaries —
+// without being fooled by anything sitting inside a literal or comment. It is the
+// exported form of the masking the classifier and statement splitter rely on, and
+// is used by the linter (internal/core/lint).
+func Mask(s string) string { return blankNoise(s) }
+
 // Span is a byte range [Start,End) within an SQL string locating one statement,
 // with surrounding whitespace already trimmed.
 type Span struct{ Start, End int }
@@ -214,7 +222,7 @@ type Span struct{ Start, End int }
 // no semicolons yields one span covering its trimmed extent (when non-blank).
 //
 // It is the basis for "the statement under the cursor" in the built-in editor,
-// and for future multi-statement \run / MCP execution.
+// and for future multi-statement .run / MCP execution.
 func StatementSpans(sql string) []Span {
 	masked := blankNoise(sql)
 	var spans []Span
