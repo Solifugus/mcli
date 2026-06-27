@@ -12,6 +12,8 @@ package safety
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // DefaultDangerous is the design §17 dangerous-statement list. Entries are
@@ -198,6 +200,80 @@ func blankNoise(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// Span is a byte range [Start,End) within an SQL string locating one statement,
+// with surrounding whitespace already trimmed.
+type Span struct{ Start, End int }
+
+// StatementSpans splits sql into individual statements on semicolons that occur
+// in code. A semicolon inside a string literal, quoted identifier, or comment
+// does not split, because the same masking the classifier uses (blankNoise)
+// turns those into spaces first. Blank segments (a trailing ';', empty lines)
+// are omitted, and every returned Span indexes the original sql. A buffer with
+// no semicolons yields one span covering its trimmed extent (when non-blank).
+//
+// It is the basis for "the statement under the cursor" in the built-in editor,
+// and for future multi-statement \run / MCP execution.
+func StatementSpans(sql string) []Span {
+	masked := blankNoise(sql)
+	var spans []Span
+	start := 0
+	add := func(end int) {
+		if s, e := trimRange(sql, start, end); s < e {
+			spans = append(spans, Span{s, e})
+		}
+	}
+	for i := 0; i < len(masked); i++ {
+		if masked[i] == ';' {
+			add(i)
+			start = i + 1
+		}
+	}
+	add(len(sql)) // the tail after the last ';' (or the whole buffer if none)
+	return spans
+}
+
+// StatementAt returns the statement span containing byte offset off, or false if
+// off falls in blank space between statements. A cursor sitting just past the
+// end of a statement (e.g. on its trailing ';' or following whitespace) is
+// attributed to that statement so "run the statement I'm on" feels natural.
+func StatementAt(sql string, off int) (Span, bool) {
+	spans := StatementSpans(sql)
+	for i, s := range spans {
+		// Inside the statement, or in the gap up to (and including) the next
+		// statement's start — attribute trailing position to the current one.
+		next := len(sql)
+		if i+1 < len(spans) {
+			next = spans[i+1].Start
+		}
+		if off >= s.Start && off < next {
+			return s, true
+		}
+	}
+	if n := len(spans); n > 0 && off >= spans[n-1].Start {
+		return spans[n-1], true
+	}
+	return Span{}, false
+}
+
+// trimRange narrows [start,end) in s past leading and trailing whitespace.
+func trimRange(s string, start, end int) (int, int) {
+	for start < end {
+		r, sz := utf8.DecodeRuneInString(s[start:end])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		start += sz
+	}
+	for start < end {
+		r, sz := utf8.DecodeLastRuneInString(s[start:end])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		end -= sz
+	}
+	return start, end
 }
 
 // blank maps a byte to itself if it is whitespace, else to a space — so blanked

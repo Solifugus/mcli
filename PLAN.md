@@ -10,19 +10,21 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Current status
 
-- **Phase:** 9 complete. MCP server landed (`internal/mcp`): a self-contained
-  stdio JSON-RPC 2.0 server, 19 tools, each a thin wrapper over a core function,
-  inheriting the same safety guards as the TUI. `mcli mcp serve` and `\mcp serve`
-  both work. Live-verified end-to-end against the `gbasic` Postgres server:
-  connect → list_tables → run_query returned real rows, describe_table showed PK
-  detection, and a `DELETE` without `WHERE` was refused (confirm=true required) —
-  the guard applies identically headless. AI (Phase 8) is now also live-confirmed
-  after the OpenAI account was funded. Phases 1–8 done.
-- **Next up:** Phase 10 (built-in editor) is deferred; Phase 11 (live-table grid
-  editing) is optional. No required phases remain. Loose ends: live SQL Server
-  round-trip (needs password); DB2 (needs a working driver); Anthropic key still
-  out of credit (OpenAI funded + verified).
-- **Last updated:** 2026-06-25 (Phase 9 complete; AI live-verified)
+- **Phase:** 10 complete. Built-in SQL editor landed: a new alt-screen
+  `modeEditor` behind `"editor": "builtin"`, with live Chroma highlighting,
+  insert/overwrite (INS/OVR cue), keyboard selection, OSC 52 copy, and — its
+  reason to exist — running the statement under the cursor (or selection) against
+  the live connection through the same safety guard, results returning to the grid
+  then back to the editor. New `safety.StatementSpans`/`StatementAt` (comment/
+  string-aware) split the buffer. Highlighting reuses `highlight.go` via the
+  extracted `renderLineSpans`. Live-verified against `gbasic`: a `SELECT` ran from
+  the editor into the grid with real rows; a `DELETE` without `WHERE` was gated by
+  the confirm prompt. Phases 1–10 done.
+- **Next up:** only Phase 11 (live-table grid editing) remains, and it is
+  optional — deferred until the PK-aware DML it unlocks is wanted. Loose ends:
+  live SQL Server round-trip (needs password); DB2 (needs a working driver);
+  Anthropic key still out of credit (OpenAI funded + verified).
+- **Last updated:** 2026-06-26 (Phase 10 complete — built-in editor)
 - **Notes:** `go.mod` is on Go 1.25.7 (bumped by go-mssqldb). `GOTOOLCHAIN=auto`
   auto-downloads the toolchain (no sudo). `gh` not installed — use plain `git`.
   Non-Postgres test DB creds are in the `test-databases` memory; MariaDB uses a
@@ -41,7 +43,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Package skeleton: `internal/core/{config,workspace,history}`, placeholder `internal/{tui,mcp,ai}`
 - [x] `.gitignore` (binaries, build output, OS cruft)
 - [~] CI: workflow written but **parked** at `.github/ci.yml.disabled` — the push token
-  lacks `workflow` scope so it can't live under `.github/workflows/`. See `.github/README.md`
+  lacks `workflow` scope so it can't live under `.github/workflows/`. See `.github/CI.md`
   to activate (add `workflow` scope to the PAT, or add the file via the GitHub web UI).
 
 ## Phase 1 — Core and configuration
@@ -189,8 +191,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Tests: protocol (initialize/echo version, notification→no reply, tools/list, unknown method, parse error), tool calls (list_workspaces, status, unknown tool, no-connection, dangerous-refused, confirm-bypasses, write→read round-trip)
 - [x] Live-verified against `gbasic` Postgres: connect → list_tables (6 tables) → run_query (real rows) → describe_table (PK detected) → DELETE-without-WHERE refused
 
-## Phase 10 — Built-in editor (deferred)
-- [ ] Internal alt-screen editor behind `\edit` + `"editor": "builtin"`: Chroma highlighting, insert/overwrite, OSC 52 copy/paste, keyboard selection, SQL-aware execution
+## Phase 10 — Built-in editor
+- [x] `safety.StatementSpans`/`StatementAt`: comment/string-aware semicolon split (basis for "statement under the cursor", future multi-statement \run/MCP) — tested
+- [x] `editorModel` (`internal/tui/editor_builtin.go`): line buffer, cursor, viewport scroll, insert/overwrite, keyboard selection, multi-line paste, statement-at-cursor — Bubble-Tea-free
+- [x] Live Chroma highlighting reusing `highlight.go` via the extracted `renderLineSpans` (per-line; cursor + selection overlay; INS underline / OVR block cue)
+- [x] New alt-screen `modeEditor` wired into the root model behind `\edit` + `"editor": "builtin"` (entry, View, resize, paste)
+- [x] `handleEditorKey` (`internal/tui/editor_keys.go`): ^R run, ^S save, ^Y copy (OSC 52), Ins overwrite, Esc quit (dirty-save prompt), movement/editing
+- [x] SQL-aware execution through the same guard as the REPL; results reuse the grid and return to the editor (Esc); dangerous statements gated by confirm
+- [x] Tests: statement split, buffer/cursor/selection ops, statement-at-cursor, Ctrl-S save, run-without-connection, clean-Esc; live-verified run + dangerous-gate against `gbasic`
 
 ## Phase 11 — Live-table grid editing (optional / later)
 - [ ] PK-aware editable grid generating DML through the safety layer — only if it proves worth it over `\edit` + `\run`

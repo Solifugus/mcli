@@ -23,6 +23,7 @@ const (
 	modeREPL   mode = iota
 	modeGrid        // alt-screen result/flat-file grid
 	modePrompt      // a one-shot interactive sub-prompt (confirm, password, wizard)
+	modeEditor      // alt-screen built-in SQL editor
 )
 
 // pending is an in-progress interactive sub-prompt. While set, the REPL is in
@@ -50,6 +51,14 @@ type Model struct {
 	// openable with \grid.
 	grid       gridModel
 	lastResult *resultSet
+
+	// Editor surface (alt-screen built-in editor). gridReturn is where the grid
+	// returns on Esc — modeREPL normally, modeEditor when a result was opened
+	// from a run inside the editor. editorRun marks an in-flight SQL op as having
+	// originated in the editor, so its result returns there instead of scrollback.
+	editor     editorModel
+	gridReturn mode
+	editorRun  bool
 
 	// lastSQL/lastSQLErr track the most recent statement and any error it
 	// produced, so \ai explain current / \ai fix current have something to act on.
@@ -136,6 +145,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeGrid {
 			m.grid = m.grid.resize(msg.Width, msg.Height)
 		}
+		if m.mode == modeEditor {
+			m.editor.resize(msg.Width, msg.Height)
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		switch m.mode {
@@ -143,11 +155,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleGridKey(msg)
 		case modePrompt:
 			return m.handlePromptKey(msg)
+		case modeEditor:
+			return m.handleEditorKey(msg)
 		}
 		return m.handleKey(msg)
 	case tea.PasteMsg:
 		if m.mode == modeREPL && !m.running {
 			return m.handlePaste(msg)
+		}
+		if m.mode == modeEditor && !m.running {
+			m.editor.insertString(msg.Content)
+			return m, nil
 		}
 		return m, nil
 	case asyncResultMsg:
@@ -248,12 +266,14 @@ func (m *Model) startPrompt(p pending) {
 	m.input.Reset()
 }
 
-// handleGridKey routes keys while the grid is open. Esc/q/Ctrl-C return to the
-// REPL; everything else drives the table (scroll, paging).
+// handleGridKey routes keys while the grid is open. Esc/q/Ctrl-C return to
+// wherever the grid was opened from (the REPL, or the editor when a result was
+// opened by running a statement inside it); everything else drives the table.
 func (m Model) handleGridKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == tea.KeyEscape || msg.Code == 'q' ||
 		(msg.Mod == tea.ModCtrl && msg.Code == 'c') {
-		m.mode = modeREPL
+		m.mode = m.gridReturn
+		m.gridReturn = modeREPL
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -296,6 +316,33 @@ func (m Model) handleAsyncResult(msg asyncResultMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastSQLErr = ""
 		}
+	}
+
+	// A run launched from inside the editor returns there (or to the grid for a
+	// row result) instead of printing to scrollback, so the editor stays put.
+	if m.editorRun {
+		m.editorRun = false
+		m.gridReturn = modeEditor
+		switch {
+		case msg.err != nil:
+			if errors.Is(msg.err, context.Canceled) {
+				m.editor.status = "canceled"
+			} else {
+				m.editor.status = "error: " + msg.err.Error()
+			}
+			m.mode = modeEditor
+		case msg.result != nil && len(msg.result.rows) > 0:
+			m.grid = newGrid(msg.result, m.width, m.height)
+			m.mode = modeGrid
+			m.editor.status = ""
+		default:
+			m.editor.status = strings.TrimSpace(strings.Join(msg.lines, " "))
+			if m.editor.status == "" {
+				m.editor.status = "ok"
+			}
+			m.mode = modeEditor
+		}
+		return m, nil
 	}
 
 	var lines []string
@@ -422,6 +469,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		}
 		m.mode = modeGrid
 		m.grid = newGrid(m.lastResult, m.width, m.height)
+	case act.editor != nil:
+		m.mode = modeEditor
+		m.editor = *act.editor
 	case act.confirm != nil:
 		m.startConfirm(*act.confirm)
 	case act.prompt != nil:
@@ -481,6 +531,11 @@ func (m Model) View() tea.View {
 	}
 	if m.mode == modeGrid {
 		v := tea.NewView(m.grid.View())
+		v.AltScreen = true
+		return v
+	}
+	if m.mode == modeEditor {
+		v := tea.NewView(m.editor.View(m.running))
 		v.AltScreen = true
 		return v
 	}

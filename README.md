@@ -25,8 +25,12 @@ unrelated tasks without losing your place.
 - **Workspaces.** Per-task context: current server/database, SQL files,
   import/export folders, and a history log, all restored on entry.
 - **Keyboard-first REPL.** Single-line input where **Enter executes**; a
-  scrollable alt-screen grid for result sets; multi-line editing handed off to
-  your `$EDITOR`.
+  scrollable alt-screen grid for result sets; multi-line editing in your
+  `$EDITOR` or the optional built-in SQL editor.
+- **Built-in SQL editor** (`"editor": "builtin"`). An alt-screen editor with
+  syntax highlighting, insert/overwrite, keyboard selection, OSC 52 copy — and
+  the point of it: run the statement under the cursor against the live
+  connection (through the same safety guard) without leaving the editor.
 - **Import/export.** CSV, TSV, pipe-delimited, Excel `.xlsx`, and fixed-width
   flat files — implemented once against a streaming row interface, so every
   database gets the same formats.

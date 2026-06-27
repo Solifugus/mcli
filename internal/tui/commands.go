@@ -32,9 +32,10 @@ func (r cmdResult) add(s string) cmdResult { r.lines = append(r.lines, s); retur
 type action struct {
 	async   asyncRun
 	cmd     tea.Cmd
-	grid    bool        // open the last result in the alt-screen grid
-	confirm *confirmReq // ask before running confirm.run as a background op
-	prompt  *pending    // enter an interactive sub-prompt
+	grid    bool         // open the last result in the alt-screen grid
+	confirm *confirmReq  // ask before running confirm.run as a background op
+	prompt  *pending     // enter an interactive sub-prompt
+	editor  *editorModel // open the built-in editor (alt-screen)
 }
 
 // confirmReq asks the user a yes/no question before launching a background op.
@@ -88,6 +89,9 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `\delete`:
 		return m.cmdDeleteFile(args), sync()
 	case `\edit`:
+		if m.core.Settings().Editor == "builtin" {
+			return m.cmdEditBuiltin(args)
+		}
 		res, c := m.cmdEdit(args)
 		return res, runCmd(c)
 	case `\mcp`:
@@ -541,7 +545,7 @@ func helpText() cmdResult {
 		`  \export query <name>|table <name>|current to <path> [exact]   export to CSV/TSV/pipe/xlsx/fixed`,
 		`  \import <path> [sheet <name>|widths N,N,...] into <table>   load a delimited/xlsx/fixed file`,
 		`  \files                                        list workspace SQL files`,
-		`  \edit <name>                                  edit a SQL file ($EDITOR)`,
+		`  \edit <name>                                  edit a SQL file ($EDITOR, or builtin editor)`,
 		`  \run <name>                                   run a SQL file`,
 		`  \cat <name>                                   print a SQL file`,
 		`  \copy <old> <new> / \rename <old> <new>       copy or rename a file`,

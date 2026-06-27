@@ -126,6 +126,6 @@ wrapper over a core function (design §21).
 The design doc (§24) defines an 11-phase plan; build in that order: (1) core +
 config, (2) REPL shell, (3) first pure-Go adapter, (4) grid + SQL files + external
 editor, (5) import/export, (6) more adapters, (7) server mgmt + safety hardening,
-(8) AI, (9) MCP server, (10) built-in editor [deferred], (11) live-table grid editing
-[optional]. Deferred features (built-in editor, editable live-table grid) are
-intentionally postponed until the capability they unlock is actually needed.
+(8) AI, (9) MCP server, (10) built-in editor [done], (11) live-table grid editing
+[optional]. Phases 1–10 are implemented. The only remaining feature, the editable
+live-table grid (11), stays postponed until the PK-aware DML it unlocks is wanted.

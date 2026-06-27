@@ -34,37 +34,66 @@ var classStyles = map[tokenClass]lipgloss.Style{
 
 func (c tokenClass) style() lipgloss.Style { return classStyles[c] }
 
-// renderInput renders the REPL input line with a block cursor at pos. When
-// highlight is enabled the text is syntax-colored per the dialect's lexer;
-// otherwise it is plain. The cursor is overlaid by reversing the character under
-// it (or a trailing space when the cursor is at end of line), so it stays
-// accurate regardless of token styling. Adjacent same-class runes are coalesced
-// into one styled span to keep the emitted ANSI compact.
+// runeRange is a half-open [lo,hi) range of rune indices within a single line,
+// used to render a selection highlight in the built-in editor.
+type runeRange struct{ lo, hi int }
+
+// reverseCursor is the default block cursor: reverse the cell under the cursor.
+func reverseCursor(s lipgloss.Style) lipgloss.Style { return s.Reverse(true) }
+
+// renderInput renders the REPL input line with a block cursor at pos, syntax-
+// colored per the dialect when highlight is enabled.
 func renderInput(value string, pos int, dialect adapter.Dialect, highlight bool) string {
 	runes := []rune(value)
+	return renderLineSpans(runes, lineClasses(value, dialect, highlight), pos, nil, nil)
+}
 
-	classes := make([]tokenClass, len(runes)) // all clsPlain by default
+// lineClasses returns the per-rune highlight class for one line; all plain when
+// highlight is off. The editor tokenizes line-by-line, matching the REPL (a
+// block comment spanning lines is an accepted minor mis-highlight).
+func lineClasses(line string, dialect adapter.Dialect, highlight bool) []tokenClass {
+	classes := make([]tokenClass, len([]rune(line)))
 	if highlight {
-		applyChromaClasses(value, dialect, classes)
+		applyChromaClasses(line, dialect, classes)
 	}
+	return classes
+}
+
+// renderLineSpans renders one line's runes with per-rune token styling. A block
+// cursor is drawn at index cursor (cursor == len(runes) draws a trailing-space
+// cursor; cursor < 0 draws none). cursorStyle transforms the cursor cell's style
+// — nil means the default reverse block; the editor passes an underline for
+// insert mode vs. reverse for overwrite, giving a cursor-shape cue. An optional
+// sel range is shown reversed. Adjacent runes sharing class and selection state
+// are coalesced into one styled span to keep the ANSI compact.
+func renderLineSpans(runes []rune, classes []tokenClass, cursor int, cursorStyle func(lipgloss.Style) lipgloss.Style, sel *runeRange) string {
+	if cursorStyle == nil {
+		cursorStyle = reverseCursor
+	}
+	inSel := func(i int) bool { return sel != nil && i >= sel.lo && i < sel.hi }
 
 	var b strings.Builder
 	for i := 0; i < len(runes); {
-		if i == pos {
-			b.WriteString(classes[i].style().Reverse(true).Render(string(runes[i])))
+		if i == cursor {
+			b.WriteString(cursorStyle(classes[i].style()).Render(string(runes[i])))
 			i++
 			continue
 		}
-		// Coalesce a run of the same class, stopping before the cursor.
+		// Coalesce a run sharing class and selection state, stopping before the cursor.
+		selHere := inSel(i)
 		j := i
-		for j < len(runes) && j != pos && classes[j] == classes[i] {
+		for j < len(runes) && j != cursor && classes[j] == classes[i] && inSel(j) == selHere {
 			j++
 		}
-		b.WriteString(classes[i].style().Render(string(runes[i:j])))
+		st := classes[i].style()
+		if selHere {
+			st = st.Reverse(true)
+		}
+		b.WriteString(st.Render(string(runes[i:j])))
 		i = j
 	}
-	if pos >= len(runes) {
-		b.WriteString(lipgloss.NewStyle().Reverse(true).Render(" "))
+	if cursor == len(runes) {
+		b.WriteString(cursorStyle(lipgloss.NewStyle()).Render(" "))
 	}
 	return b.String()
 }

@@ -42,6 +42,26 @@ func (m *Model) cmdEdit(args []string) (cmdResult, tea.Cmd) {
 	})
 }
 
+// cmdEditBuiltin opens a workspace SQL file in the built-in editor (Phase 10),
+// used when the "editor" setting is "builtin". Unlike the external handoff this
+// is an alt-screen mode, not an ExecProcess round-trip: it returns an action
+// that switches the model into modeEditor with the file loaded.
+func (m *Model) cmdEditBuiltin(args []string) (cmdResult, action) {
+	if len(args) < 1 {
+		return out(`usage: \edit <name>`), sync()
+	}
+	name := args[0]
+	if err := m.core.EnsureSQLFile(name); err != nil {
+		return errOut(err), sync()
+	}
+	content, err := m.core.ReadSQLFile(name)
+	if err != nil {
+		return errOut(err), sync()
+	}
+	ed := newEditor(name, content, m.width, m.height, m.core.Dialect(), m.colorPrompt)
+	return cmdResult{}, action{editor: &ed}
+}
+
 // resolveEditor determines the editor command (and any leading args) to launch
 // for \edit, per §11. The setting wins; then $VISUAL, $EDITOR, then a platform
 // default. A multi-word setting like "code --wait" is split into command+args.
