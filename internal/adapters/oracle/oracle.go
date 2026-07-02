@@ -121,17 +121,59 @@ func (a *Adapter) ListSchemas(ctx context.Context) ([]string, error) {
 }
 
 func (a *Adapter) ListTables(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "table",
-		`SELECT owner, table_name FROM all_tables
-		 WHERE owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')
-		 ORDER BY owner, table_name`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindTable}, "")
 }
 
 func (a *Adapter) ListViews(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "view",
-		`SELECT owner, view_name FROM all_views
-		 WHERE owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')
-		 ORDER BY owner, view_name`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindView}, "")
+}
+
+// SearchObjects is the typed object finder (design §27). Each requested kind
+// runs its own catalog query scoped to the current schema and filtered by a
+// case-insensitive name substring (Oracle identifiers are upper-cased, so the
+// needle is UPPER()'d, matching SearchColumns/SearchViews); results are
+// concatenated in kind order. Procedures/functions come from all_objects.
+func (a *Adapter) SearchObjects(ctx context.Context, kinds []adapter.ObjectKind, substr string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	if len(kinds) == 0 {
+		kinds = adapter.AllObjectKinds()
+	}
+	var out []adapter.ObjectRef
+	for _, k := range kinds {
+		var sql string
+		switch k {
+		case adapter.KindTable:
+			sql = `SELECT owner, table_name FROM all_tables
+			       WHERE owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')
+			         AND table_name LIKE '%' || UPPER(:1) || '%'
+			       ORDER BY owner, table_name`
+		case adapter.KindView:
+			sql = `SELECT owner, view_name FROM all_views
+			       WHERE owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')
+			         AND view_name LIKE '%' || UPPER(:1) || '%'
+			       ORDER BY owner, view_name`
+		case adapter.KindProcedure, adapter.KindFunction:
+			ot := "PROCEDURE"
+			if k == adapter.KindFunction {
+				ot = "FUNCTION"
+			}
+			sql = `SELECT owner, object_name FROM all_objects
+			       WHERE owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')
+			         AND object_type = '` + ot + `'
+			         AND object_name LIKE '%' || UPPER(:1) || '%'
+			       ORDER BY owner, object_name`
+		default:
+			continue
+		}
+		refs, err := a.queryObjects(ctx, string(k), sql, substr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
 }
 
 // DescribeObject returns columns for a table or view, marking primary-key
@@ -274,13 +316,334 @@ func (a *Adapter) SearchViews(ctx context.Context, text string) ([]adapter.Objec
 		 ORDER BY owner, view_name`, text)
 }
 
-// Lineage is not yet implemented for Oracle (design §19, a later phase).
-func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// depKindCase maps all_dependencies TYPE / REFERENCED_TYPE to our ObjectKind
+// labels; the %s picks which column.
+const depKindCase = `CASE %s WHEN 'VIEW' THEN 'view' WHEN 'TABLE' THEN 'table'
+       WHEN 'PROCEDURE' THEN 'procedure' WHEN 'FUNCTION' THEN 'function'
+       ELSE LOWER(%s) END`
+
+// GetPreLineage returns the objects the named object depends on (its inputs),
+// one hop, from all_dependencies (objects visible to the current user).
+func (a *Adapter) GetPreLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT referenced_owner, referenced_name, ` +
+		fmt.Sprintf(depKindCase, "referenced_type", "referenced_type") + `
+FROM all_dependencies
+WHERE name = :1 AND owner = NVL(:2, SYS_CONTEXT('USERENV','CURRENT_SCHEMA'))
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
 }
 
-func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// GetPostLineage returns the objects that depend on the named object (its
+// consumers), one hop.
+func (a *Adapter) GetPostLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT owner, name, ` + fmt.Sprintf(depKindCase, "type", "type") + `
+FROM all_dependencies
+WHERE referenced_name = :1 AND referenced_owner = NVL(:2, SYS_CONTEXT('USERENV','CURRENT_SCHEMA'))
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
+}
+
+// queryLineage runs a lineage query whose binds are (:1) the upper-cased object
+// name and (:2) the optional owner, returning (owner, name, kind) rows.
+func (a *Adapter) queryLineage(ctx context.Context, query, name string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	schema, obj := splitName(name)
+	obj = strings.ToUpper(obj)
+	schemaArg := sql.NullString{String: strings.ToUpper(schema), Valid: schema != ""}
+	rows, err := a.db.QueryContext(ctx, query, obj, schemaArg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.ObjectRef
+	for rows.Next() {
+		var ref adapter.ObjectRef
+		if err := rows.Scan(&ref.Schema, &ref.Name, &ref.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
+// Source returns the definition text of a view, procedure, or function via
+// DBMS_METADATA.GET_DDL (a CLOB, avoiding the LONG all_views.text column). Tables
+// have no routine/view DDL here — use DescribeObject.
+func (a *Adapter) Source(ctx context.Context, name string) (adapter.ObjectSource, error) {
+	if a.db == nil {
+		return adapter.ObjectSource{}, errNotConnected
+	}
+	schema, obj := splitName(name)
+	obj = strings.ToUpper(obj)
+	schemaArg := sql.NullString{String: strings.ToUpper(schema), Valid: schema != ""}
+
+	var owner, otype string
+	err := a.db.QueryRowContext(ctx,
+		`SELECT owner, object_type FROM all_objects
+		 WHERE object_name = :1 AND owner = NVL(:2, SYS_CONTEXT('USERENV','CURRENT_SCHEMA'))
+		   AND object_type IN ('VIEW','PROCEDURE','FUNCTION') AND ROWNUM = 1`,
+		obj, schemaArg).Scan(&owner, &otype)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adapter.ObjectSource{}, fmt.Errorf("oracle: no view, procedure, or function named %q", name)
+	}
+	if err != nil {
+		return adapter.ObjectSource{}, err
+	}
+	var ddl string
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT DBMS_METADATA.GET_DDL(:1, :2, :3) FROM dual`, otype, obj, owner).Scan(&ddl); err != nil {
+		return adapter.ObjectSource{}, err
+	}
+	kind := adapter.KindFunction
+	switch otype {
+	case "VIEW":
+		kind = adapter.KindView
+	case "PROCEDURE":
+		kind = adapter.KindProcedure
+	}
+	return adapter.ObjectSource{
+		Ref:      adapter.ObjectRef{Schema: owner, Name: obj, Type: string(kind)},
+		Language: "plsql",
+		Body:     strings.TrimSpace(ddl),
+	}, nil
+}
+
+// SearchRoutines finds procedures/functions whose name or body matches text
+// (all_source holds the body one line per row).
+func (a *Adapter) SearchRoutines(ctx context.Context, text string) ([]adapter.ObjectRef, error) {
+	var out []adapter.ObjectRef
+	for _, rt := range []struct{ kind, typ string }{
+		{string(adapter.KindProcedure), "PROCEDURE"},
+		{string(adapter.KindFunction), "FUNCTION"},
+	} {
+		refs, err := a.queryObjects(ctx, rt.kind,
+			`SELECT DISTINCT owner, name FROM all_source
+			 WHERE type = '`+rt.typ+`'
+			   AND owner = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')
+			   AND (name LIKE '%' || UPPER(:1) || '%' OR UPPER(text) LIKE '%' || UPPER(:1) || '%')
+			 ORDER BY owner, name`, text)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
+}
+
+// --- scheduling: DBMS_SCHEDULER jobs ---
+
+// defaultJobHistoryLimit bounds JobHistory when the caller passes limit <= 0.
+const defaultJobHistoryLimit = 50
+
+// ListJobs lists DBMS_SCHEDULER jobs (all_scheduler_jobs) whose name matches
+// substr. Oracle job names are typically uppercase, so the match is folded.
+func (a *Adapter) ListJobs(ctx context.Context, substr string) ([]adapter.JobRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	rows, err := a.db.QueryContext(ctx,
+		`SELECT job_name, enabled FROM all_scheduler_jobs
+		 WHERE UPPER(job_name) LIKE '%' || UPPER(:1) || '%'
+		 ORDER BY job_name`, substr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.JobRef
+	for rows.Next() {
+		var name, enabled string
+		if err := rows.Scan(&name, &enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, adapter.JobRef{Name: name, Enabled: strings.EqualFold(enabled, "TRUE")})
+	}
+	return out, rows.Err()
+}
+
+// DescribeJob returns a scheduler job's owner, repeat interval (as its schedule),
+// next run time, comment, and its single action (represented as one step).
+func (a *Adapter) DescribeJob(ctx context.Context, name string) (adapter.Job, error) {
+	if a.db == nil {
+		return adapter.Job{}, errNotConnected
+	}
+	var jobName, enabled, owner, repeat, nextRun, action, comments string
+	err := a.db.QueryRowContext(ctx,
+		`SELECT job_name, enabled, owner, NVL(repeat_interval,''),
+		        NVL(TO_CHAR(next_run_date),''), NVL(job_action,''), NVL(comments,'')
+		 FROM all_scheduler_jobs
+		 WHERE UPPER(job_name) = UPPER(:1) AND ROWNUM = 1`, name).
+		Scan(&jobName, &enabled, &owner, &repeat, &nextRun, &action, &comments)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adapter.Job{}, fmt.Errorf("oracle: no scheduler job named %q", name)
+	}
+	if err != nil {
+		return adapter.Job{}, err
+	}
+	job := adapter.Job{
+		Ref:     adapter.JobRef{Name: jobName, Enabled: strings.EqualFold(enabled, "TRUE"), Schedule: repeat},
+		Owner:   owner,
+		NextRun: nextRun,
+		Comment: comments,
+	}
+	if strings.TrimSpace(action) != "" {
+		job.Steps = []adapter.JobStep{{Name: "action", Command: action}}
+	}
+	return job, nil
+}
+
+// JobHistory returns run records from all_scheduler_job_run_details, newest
+// first. actual_start_date is the run start; log_date is when the outcome was
+// logged (≈ end).
+func (a *Adapter) JobHistory(ctx context.Context, name string, limit int) ([]adapter.JobRun, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	if limit <= 0 {
+		limit = defaultJobHistoryLimit
+	}
+	rows, err := a.db.QueryContext(ctx,
+		`SELECT * FROM (
+		   SELECT NVL(TO_CHAR(actual_start_date),''), NVL(TO_CHAR(log_date),''),
+		          LOWER(status), NVL(additional_info,'')
+		   FROM all_scheduler_job_run_details
+		   WHERE UPPER(job_name) = UPPER(:1)
+		   ORDER BY log_date DESC
+		 ) WHERE ROWNUM <= :2`, name, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.JobRun
+	for rows.Next() {
+		var run adapter.JobRun
+		var status sql.NullString
+		if err := rows.Scan(&run.Start, &run.End, &status, &run.Message); err != nil {
+			return nil, err
+		}
+		run.Status = status.String
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
+// --- security: users and roles (dba_* catalog views) ---
+
+// ListPrincipals lists database users (dba_users) and roles (dba_roles). These
+// dba_* views require catalog privileges (e.g. SELECT_CATALOG_ROLE); a login
+// without them gets the driver's permission error. kind filters the user/role
+// split; substr filters by name (case-folded, as Oracle names are uppercase).
+func (a *Adapter) ListPrincipals(ctx context.Context, kind, substr string) ([]adapter.PrincipalRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	var out []adapter.PrincipalRef
+	if kind != adapter.PrincipalKindRole {
+		rows, err := a.db.QueryContext(ctx,
+			`SELECT username, account_status FROM dba_users
+			 WHERE UPPER(username) LIKE '%' || UPPER(:1) || '%'
+			 ORDER BY username`, substr)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var name, status string
+			if err := rows.Scan(&name, &status); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, adapter.PrincipalRef{Name: name, Kind: adapter.PrincipalKindUser, Enabled: status == "OPEN"})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	if kind != adapter.PrincipalKindUser {
+		refs, err := a.queryStrings(ctx,
+			`SELECT role FROM dba_roles
+			 WHERE UPPER(role) LIKE '%' || UPPER(:1) || '%'
+			 ORDER BY role`, substr)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range refs {
+			out = append(out, adapter.PrincipalRef{Name: r, Kind: adapter.PrincipalKindRole, Enabled: true})
+		}
+	}
+	return out, nil
+}
+
+// DescribePrincipal returns a user's or role's granted roles, its members (for a
+// role), and its system and object privileges.
+func (a *Adapter) DescribePrincipal(ctx context.Context, name string) (adapter.Principal, error) {
+	if a.db == nil {
+		return adapter.Principal{}, errNotConnected
+	}
+	up := strings.ToUpper(name)
+
+	var status string
+	err := a.db.QueryRowContext(ctx,
+		`SELECT account_status FROM dba_users WHERE username = :1`, up).Scan(&status)
+	var p adapter.Principal
+	switch {
+	case err == nil:
+		p.Ref = adapter.PrincipalRef{Name: up, Kind: adapter.PrincipalKindUser, Enabled: status == "OPEN"}
+		p.Attributes = append(p.Attributes, "account_status="+status)
+	case errors.Is(err, sql.ErrNoRows):
+		var role string
+		if err := a.db.QueryRowContext(ctx,
+			`SELECT role FROM dba_roles WHERE role = :1`, up).Scan(&role); errors.Is(err, sql.ErrNoRows) {
+			return adapter.Principal{}, fmt.Errorf("oracle: no user or role named %q", name)
+		} else if err != nil {
+			return adapter.Principal{}, err
+		}
+		p.Ref = adapter.PrincipalRef{Name: up, Kind: adapter.PrincipalKindRole, Enabled: true}
+	default:
+		return adapter.Principal{}, err
+	}
+
+	if p.MemberOf, err = a.queryStrings(ctx,
+		`SELECT granted_role FROM dba_role_privs WHERE grantee = :1 ORDER BY granted_role`, up); err != nil {
+		return adapter.Principal{}, err
+	}
+	if p.Members, err = a.queryStrings(ctx,
+		`SELECT grantee FROM dba_role_privs WHERE granted_role = :1 ORDER BY grantee`, up); err != nil {
+		return adapter.Principal{}, err
+	}
+
+	grantRows, err := a.db.QueryContext(ctx,
+		`SELECT privilege, '' AS obj FROM dba_sys_privs WHERE grantee = :1
+		 UNION ALL
+		 SELECT privilege, owner || '.' || table_name FROM dba_tab_privs WHERE grantee = :1
+		 ORDER BY 1, 2`, up)
+	if err != nil {
+		return adapter.Principal{}, err
+	}
+	defer grantRows.Close()
+	for grantRows.Next() {
+		var g adapter.Grant
+		if err := grantRows.Scan(&g.Privilege, &g.On); err != nil {
+			return adapter.Principal{}, err
+		}
+		p.Grants = append(p.Grants, g)
+	}
+	return p, grantRows.Err()
+}
+
+// Capabilities: Oracle's plan flow is a two-step EXPLAIN PLAN FOR /
+// DBMS_XPLAN.DISPLAY that does not fit the single-query model, so ExplainQuery
+// stays unsupported. It supports source retrieval (DBMS_METADATA),
+// DBMS_SCHEDULER job introspection, and user/role security introspection (dba_*
+// views — needs catalog privileges). Table-function detection (pipelined /
+// collection-returning functions) is deferred — reliably classifying them from
+// the catalog is non-trivial — so CapTableFunctions is not advertised yet, though
+// TabularQuery already emits Oracle's TABLE(...) syntax. Other features arrive in
+// later phases.
+func (a *Adapter) Capabilities() adapter.CapabilitySet {
+	return adapter.Caps(adapter.CapLineage, adapter.CapSource, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectOracle }

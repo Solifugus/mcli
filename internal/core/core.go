@@ -9,6 +9,7 @@ import (
 
 	"github.com/Solifugus/mcli/internal/ai"
 	"github.com/Solifugus/mcli/internal/core/adapter"
+	"github.com/Solifugus/mcli/internal/core/assist"
 	"github.com/Solifugus/mcli/internal/core/config"
 	"github.com/Solifugus/mcli/internal/core/history"
 	"github.com/Solifugus/mcli/internal/core/workspace"
@@ -34,7 +35,19 @@ type Core struct {
 	// readOnly is the runtime read-only toggle (seeded from settings, flipped by
 	// .readonly). It guards writes in RunStatement; see internal/core/safety.go.
 	readOnly bool
+
+	// assist is the guidance channel (design §26). The active front-end
+	// subscribes; the ui_* MCP tools publish. It is always non-nil.
+	assist *assist.Bus
 }
+
+// Assist returns the guidance event bus. The ui_* MCP tools publish to it and
+// the active front-end subscribes; see internal/core/assist and design §26.
+func (c *Core) Assist() *assist.Bus { return c.assist }
+
+// ConfigRoot returns mcli's home directory (~/.mcli), where the live-session
+// endpoint descriptor (session.json) is written.
+func (c *Core) ConfigRoot() string { return c.cfg.Root }
 
 // Open initializes mcli rooted at the given ~/.mcli directory: it ensures the
 // on-disk layout, loads settings, guarantees the default workspace exists, and
@@ -64,6 +77,7 @@ func Open(root string) (*Core, error) {
 	c := &Core{
 		cfg: cfg, workspaces: wm, settings: settings, servers: servers,
 		aiCfg: aiCfg, aiClient: ai.New(), readOnly: settings.ReadOnly,
+		assist: assist.NewBus(),
 	}
 
 	start := settings.StartupWorkspace

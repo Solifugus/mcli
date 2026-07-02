@@ -25,6 +25,18 @@ func drive(t *testing.T, requests ...string) []rpcResponse {
 	return decodeResponses(t, out.String())
 }
 
+// driveCore is drive against a caller-supplied core, so a test can subscribe to
+// its assist bus before running guidance tools.
+func driveCore(t *testing.T, c *core.Core, requests ...string) []rpcResponse {
+	t.Helper()
+	in := strings.NewReader(strings.Join(requests, "\n") + "\n")
+	var out strings.Builder
+	if err := Serve(context.Background(), c, in, &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	return decodeResponses(t, out.String())
+}
+
 func decodeResponses(t *testing.T, raw string) []rpcResponse {
 	t.Helper()
 	var resps []rpcResponse
@@ -168,6 +180,83 @@ func TestCallUnknownTool(t *testing.T) {
 	}
 }
 
+func TestSearchObjectsInToolsList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	if !strings.Contains(string(b), `"search_objects"`) {
+		t.Errorf("tools/list missing search_objects")
+	}
+}
+
+func TestCallSearchObjectsNoConnection(t *testing.T) {
+	// With no connection the core returns ErrNotConnected; the tool surfaces it
+	// as an isError result rather than a protocol error.
+	resps := drive(t, call("search_objects", map[string]any{
+		"kinds": []string{"table", "view"}, "substring": "order",
+	}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("search_objects without a connection should be an isError result, got %q", text)
+	}
+}
+
+func TestUIToolsInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	for _, want := range []string{"ui_describe_screen", "ui_highlight", "ui_prefill", "ui_demo"} {
+		if !strings.Contains(string(b), `"`+want+`"`) {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+}
+
+func TestUIDescribeScreenNoLiveSession(t *testing.T) {
+	resps := drive(t, call("ui_describe_screen", nil))
+	text, isErr := toolText(t, resps[0])
+	if isErr {
+		t.Fatalf("ui_describe_screen should not error: %s", text)
+	}
+	if !strings.Contains(text, `"live": false`) {
+		t.Errorf("expected live:false with no front-end attached, got %q", text)
+	}
+}
+
+func TestUIPrefillNoLiveSession(t *testing.T) {
+	// No front-end is subscribed, so guidance has nowhere to render: the tool
+	// reports it as an isError result rather than silently dropping.
+	resps := drive(t, call("ui_prefill", map[string]any{"target": "input-line", "text": "select 1"}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("ui_prefill with no live session should be an isError result, got %q", text)
+	}
+	if !strings.Contains(text, "no live session") {
+		t.Errorf("expected a no-live-session message, got %q", text)
+	}
+}
+
+func TestUIPrefillDeliveredToSubscriber(t *testing.T) {
+	c, err := core.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("core.Open: %v", err)
+	}
+	ch, unsub := c.Assist().Subscribe()
+	defer unsub()
+
+	resps := driveCore(t, c, call("ui_prefill", map[string]any{"target": "input-line", "text": "select 42"}))
+	text, isErr := toolText(t, resps[0])
+	if isErr {
+		t.Fatalf("ui_prefill with a live session should succeed: %s", text)
+	}
+	select {
+	case e := <-ch:
+		if string(e.Kind) != "prefill" || e.Target != "input-line" || e.Text != "select 42" {
+			t.Errorf("unexpected event: %+v", e)
+		}
+	default:
+		t.Error("expected the prefill event to be delivered to the subscriber")
+	}
+}
+
 func TestCallRunQueryNoConnection(t *testing.T) {
 	resps := drive(t, call("run_query", map[string]any{"sql": "select 1"}))
 	text, isErr := toolText(t, resps[0])
@@ -250,5 +339,142 @@ func TestLintSQLToolClean(t *testing.T) {
 	}
 	if strings.Contains(text, "dangerous-sql") || strings.Contains(text, "select-star") {
 		t.Errorf("clean SQL should have no safety/style findings: %s", text)
+	}
+}
+
+func TestGetCapabilitiesInToolsList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	if !strings.Contains(string(b), `"get_capabilities"`) {
+		t.Errorf("tools/list missing get_capabilities")
+	}
+}
+
+func TestCallGetCapabilitiesNoConnection(t *testing.T) {
+	resps := drive(t, call("get_capabilities", map[string]any{}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("get_capabilities without a connection should be an isError result, got %q", text)
+	}
+}
+
+func TestSourceToolsInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	for _, want := range []string{"get_source", "search_routines"} {
+		if !strings.Contains(string(b), `"`+want+`"`) {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+}
+
+func TestCallGetSourceNoConnection(t *testing.T) {
+	resps := drive(t, call("get_source", map[string]any{"name": "some_view"}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("get_source without a connection should be an isError result, got %q", text)
+	}
+}
+
+func TestSearchTableFunctionsInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	if !strings.Contains(string(b), `"search_table_functions"`) {
+		t.Errorf("tools/list missing search_table_functions")
+	}
+}
+
+func TestCallSearchTableFunctionsNoConnection(t *testing.T) {
+	resps := drive(t, call("search_table_functions", map[string]any{"substring": "f"}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("search_table_functions without a connection should be an isError result, got %q", text)
+	}
+}
+
+func TestJobToolsInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	for _, want := range []string{"list_jobs", "describe_job", "job_history"} {
+		if !strings.Contains(string(b), `"`+want+`"`) {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+}
+
+func TestCallJobToolsNoConnection(t *testing.T) {
+	for _, c := range []string{
+		call("list_jobs", map[string]any{"substring": ""}),
+		call("describe_job", map[string]any{"name": "nightly"}),
+		call("job_history", map[string]any{"name": "nightly"}),
+	} {
+		resps := drive(t, c)
+		text, isErr := toolText(t, resps[0])
+		if !isErr {
+			t.Errorf("job tool without a connection should be an isError result, got %q", text)
+		}
+	}
+}
+
+func TestSecurityToolsInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	for _, want := range []string{"list_principals", "describe_principal"} {
+		if !strings.Contains(string(b), `"`+want+`"`) {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+}
+
+func TestCallSecurityToolsNoConnection(t *testing.T) {
+	for _, c := range []string{
+		call("list_principals", map[string]any{"kind": "user"}),
+		call("describe_principal", map[string]any{"name": "postgres"}),
+	} {
+		resps := drive(t, c)
+		text, isErr := toolText(t, resps[0])
+		if !isErr {
+			t.Errorf("security tool without a connection should be an isError result, got %q", text)
+		}
+	}
+}
+
+func TestSecurityEditToolsInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	for _, want := range []string{"grant", "create_user", "drop_user"} {
+		if !strings.Contains(string(b), `"`+want+`"`) {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+}
+
+func TestCallSecurityEditToolsNoConnection(t *testing.T) {
+	for _, c := range []string{
+		call("grant", map[string]any{"privileges": []string{"SELECT"}, "on": "t", "to": "bob"}),
+		call("create_user", map[string]any{"name": "bob", "password": "x"}),
+		call("drop_user", map[string]any{"name": "bob", "confirm": true}),
+	} {
+		resps := drive(t, c)
+		text, isErr := toolText(t, resps[0])
+		if !isErr {
+			t.Errorf("security-edit tool without a connection should be an isError result, got %q", text)
+		}
+	}
+}
+
+func TestLineageToolInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	if !strings.Contains(string(b), `"get_lineage"`) {
+		t.Errorf("tools/list missing get_lineage")
+	}
+}
+
+func TestCallGetLineageNoConnection(t *testing.T) {
+	resps := drive(t, call("get_lineage", map[string]any{"name": "some_view", "direction": "pre"}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("get_lineage without a connection should be an isError result, got %q", text)
 	}
 }

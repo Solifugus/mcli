@@ -171,6 +171,16 @@ func (c *Core) ListViews(ctx context.Context) ([]adapter.ObjectRef, error) {
 	return c.conn.ListViews(ctx)
 }
 
+// SearchObjects is the typed object finder: objects whose kind is in kinds
+// (empty = all kinds) and whose name contains substr (case-insensitive, empty =
+// all names). It is a read-only catalog query, so no safety guard applies.
+func (c *Core) SearchObjects(ctx context.Context, kinds []adapter.ObjectKind, substr string) ([]adapter.ObjectRef, error) {
+	if c.conn == nil {
+		return nil, ErrNotConnected
+	}
+	return c.conn.SearchObjects(ctx, kinds, substr)
+}
+
 func (c *Core) Describe(ctx context.Context, name string) (adapter.ObjectDetail, error) {
 	if c.conn == nil {
 		return adapter.ObjectDetail{}, ErrNotConnected

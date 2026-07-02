@@ -8,13 +8,16 @@ import (
 // fakeAdapter is a no-op adapter used to exercise the registry.
 type fakeAdapter struct{}
 
-func (fakeAdapter) Connect(context.Context, ConnectParams) error          { return nil }
-func (fakeAdapter) Disconnect() error                                     { return nil }
-func (fakeAdapter) ListDatabases(context.Context) ([]string, error)       { return nil, nil }
-func (fakeAdapter) UseDatabase(context.Context, string) error             { return nil }
-func (fakeAdapter) ListSchemas(context.Context) ([]string, error)         { return nil, nil }
-func (fakeAdapter) ListTables(context.Context) ([]ObjectRef, error)       { return nil, nil }
-func (fakeAdapter) ListViews(context.Context) ([]ObjectRef, error)        { return nil, nil }
+func (fakeAdapter) Connect(context.Context, ConnectParams) error    { return nil }
+func (fakeAdapter) Disconnect() error                               { return nil }
+func (fakeAdapter) ListDatabases(context.Context) ([]string, error) { return nil, nil }
+func (fakeAdapter) UseDatabase(context.Context, string) error       { return nil }
+func (fakeAdapter) ListSchemas(context.Context) ([]string, error)   { return nil, nil }
+func (fakeAdapter) ListTables(context.Context) ([]ObjectRef, error) { return nil, nil }
+func (fakeAdapter) ListViews(context.Context) ([]ObjectRef, error)  { return nil, nil }
+func (fakeAdapter) SearchObjects(context.Context, []ObjectKind, string) ([]ObjectRef, error) {
+	return nil, nil
+}
 func (fakeAdapter) DescribeObject(context.Context, string) (ObjectDetail, error) {
 	return ObjectDetail{}, nil
 }
@@ -22,14 +25,15 @@ func (fakeAdapter) RunQuery(context.Context, string) (RowStream, error) { return
 func (fakeAdapter) RunStatement(context.Context, string) (Result, error) {
 	return Result{}, nil
 }
-func (fakeAdapter) ExplainQuery(context.Context, string) (Plan, error)    { return Plan{}, nil }
+func (fakeAdapter) ExplainQuery(context.Context, string) (Plan, error)         { return Plan{}, nil }
 func (fakeAdapter) SearchColumns(context.Context, string) ([]ColumnRef, error) { return nil, nil }
 func (fakeAdapter) SearchViews(context.Context, string) ([]ObjectRef, error)   { return nil, nil }
 func (fakeAdapter) GetPreLineage(context.Context, string) ([]ObjectRef, error) { return nil, nil }
 func (fakeAdapter) GetPostLineage(context.Context, string) ([]ObjectRef, error) {
 	return nil, nil
 }
-func (fakeAdapter) Dialect() Dialect { return DialectGenericSQL }
+func (fakeAdapter) Capabilities() CapabilitySet { return Caps() }
+func (fakeAdapter) Dialect() Dialect            { return DialectGenericSQL }
 
 func TestRegisterAndNew(t *testing.T) {
 	Register("fake", func() Adapter { return fakeAdapter{} })

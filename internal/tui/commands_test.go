@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/config"
 )
 
@@ -131,12 +132,12 @@ func TestEnterUnknownWorkspaceErrors(t *testing.T) {
 func TestWorkspaceUsageMessages(t *testing.T) {
 	m := newTestModel(t)
 	cases := map[string]string{
-		`.workspace`:               "usage:",
-		`.workspace create`:        "usage:",
-		`.workspace rename only`:   "usage:",
-		`.workspace delete`:        "usage:",
-		`.enter`:                   "usage:",
-		`.workspace frobnicate`:    "unknown",
+		`.workspace`:             "usage:",
+		`.workspace create`:      "usage:",
+		`.workspace rename only`: "usage:",
+		`.workspace delete`:      "usage:",
+		`.enter`:                 "usage:",
+		`.workspace frobnicate`:  "unknown",
 	}
 	for in, want := range cases {
 		if got := joinLines(dispatch(m, in)); !strings.Contains(got, want) {
@@ -209,5 +210,154 @@ func TestPromptStringReflectsWorkspace(t *testing.T) {
 	m := newTestModel(t)
 	if got := m.promptString(); got != "default> " {
 		t.Errorf("prompt = %q, want %q", got, "default> ")
+	}
+}
+
+func TestDispatchCapsDisconnected(t *testing.T) {
+	m := newTestModel(t)
+	r := dispatch(m, `.caps`)
+	if !strings.Contains(joinLines(r), "not connected") {
+		t.Errorf(".caps while disconnected should say so, got %q", joinLines(r))
+	}
+}
+
+func TestDispatchSourceGrepUsage(t *testing.T) {
+	m := newTestModel(t)
+	if r := dispatch(m, `.source`); !strings.Contains(joinLines(r), "usage:") {
+		t.Errorf(".source with no args should show usage, got %q", joinLines(r))
+	}
+	if r := dispatch(m, `.grep`); !strings.Contains(joinLines(r), "usage:") {
+		t.Errorf(".grep with no args should show usage, got %q", joinLines(r))
+	}
+}
+
+func TestDispatchJobUsage(t *testing.T) {
+	m := newTestModel(t)
+	if r := dispatch(m, `.job`); !strings.Contains(joinLines(r), "usage:") {
+		t.Errorf(".job with no args should show usage, got %q", joinLines(r))
+	}
+}
+
+// TestDispatchJobsAsync confirms .jobs routes to a background runner (the actual
+// job listing needs a connection); disconnected it yields no immediate output.
+func TestDispatchJobsAsync(t *testing.T) {
+	m := newTestModel(t)
+	res, act := m.handleLine(`.jobs`)
+	if act.async == nil {
+		t.Error(".jobs should dispatch to a background runner")
+	}
+	if len(res.lines) != 0 {
+		t.Errorf(".jobs immediate output should be empty, got %v", res.lines)
+	}
+}
+
+func TestDispatchUserUsage(t *testing.T) {
+	m := newTestModel(t)
+	if r := dispatch(m, `.user`); !strings.Contains(joinLines(r), "usage:") {
+		t.Errorf(".user with no args should show usage, got %q", joinLines(r))
+	}
+}
+
+// TestDispatchUsersAsync confirms .users / .roles route to a background runner.
+func TestDispatchUsersAsync(t *testing.T) {
+	m := newTestModel(t)
+	for _, cmd := range []string{`.users`, `.roles`} {
+		_, act := m.handleLine(cmd)
+		if act.async == nil {
+			t.Errorf("%s should dispatch to a background runner", cmd)
+		}
+	}
+}
+
+func TestParseGrantArgs(t *testing.T) {
+	// Privilege grant with ON.
+	items, obj, who, ok := parseGrantArgs([]string{"SELECT,", "INSERT", "ON", "s.t", "TO", "bob"}, "TO")
+	if !ok || obj != "s.t" || who != "bob" || len(items) != 2 || items[0] != "SELECT" || items[1] != "INSERT" {
+		t.Errorf("privilege grant parse = %v obj=%q who=%q ok=%v", items, obj, who, ok)
+	}
+	// Role grant (no ON).
+	items, obj, who, ok = parseGrantArgs([]string{"read_role", "TO", "bob"}, "TO")
+	if !ok || obj != "" || who != "bob" || len(items) != 1 || items[0] != "read_role" {
+		t.Errorf("role grant parse = %v obj=%q who=%q ok=%v", items, obj, who, ok)
+	}
+	// Revoke uses FROM.
+	_, _, who, ok = parseGrantArgs([]string{"SELECT", "ON", "t", "FROM", "bob"}, "FROM")
+	if !ok || who != "bob" {
+		t.Errorf("revoke parse who=%q ok=%v", who, ok)
+	}
+	// Malformed: missing principal, or multiple principal tokens.
+	for _, bad := range [][]string{
+		{"SELECT", "ON", "t", "TO"},
+		{"SELECT", "ON", "t", "TO", "bob", "carol"},
+		{"TO", "bob"},
+		{},
+	} {
+		if _, _, _, ok := parseGrantArgs(bad, "TO"); ok {
+			t.Errorf("parseGrantArgs(%v) should fail", bad)
+		}
+	}
+}
+
+func TestDispatchSecurityEditUsage(t *testing.T) {
+	m := newTestModel(t)
+	// Malformed grant (no TO) → usage, no async/confirm.
+	if r, act := m.handleLine(`.grant SELECT ON t`); !strings.Contains(joinLines(r), "usage:") || act.async != nil {
+		t.Errorf(".grant malformed should show usage, got %q", joinLines(r))
+	}
+	if r, _ := m.handleLine(`.createuser bob`); !strings.Contains(joinLines(r), "usage:") {
+		t.Errorf(".createuser with one arg should show usage, got %q", joinLines(r))
+	}
+	if r, _ := m.handleLine(`.dropuser`); !strings.Contains(joinLines(r), "usage:") {
+		t.Errorf(".dropuser with no args should show usage, got %q", joinLines(r))
+	}
+}
+
+func TestDispatchLineageUsage(t *testing.T) {
+	m := newTestModel(t)
+	for _, cmd := range []string{`.pre-lineage`, `.post-lineage`} {
+		if r := dispatch(m, cmd); !strings.Contains(joinLines(r), "usage:") {
+			t.Errorf("%s with no args should show usage, got %q", cmd, joinLines(r))
+		}
+	}
+}
+
+// TestDispatchLineageAsync confirms .pre-lineage / .post-lineage route to a
+// background runner (the walk needs a connection).
+func TestDispatchLineageAsync(t *testing.T) {
+	m := newTestModel(t)
+	for _, cmd := range []string{`.pre-lineage v`, `.post-lineage t`} {
+		res, act := m.handleLine(cmd)
+		if act.async == nil {
+			t.Errorf("%q should dispatch to a background runner", cmd)
+		}
+		if len(res.lines) != 0 {
+			t.Errorf("%q immediate output should be empty, got %v", cmd, res.lines)
+		}
+	}
+}
+
+func TestRenderLineageTree(t *testing.T) {
+	g := core.LineageGraph{
+		Root:      adapter.ObjectRef{Schema: "s", Name: "v"},
+		Direction: "pre",
+		Edges: []core.LineageEdge{
+			{From: adapter.ObjectRef{Schema: "s", Name: "a", Type: "table"}, To: adapter.ObjectRef{Schema: "s", Name: "v"}},
+			{From: adapter.ObjectRef{Schema: "s", Name: "b", Type: "view"}, To: adapter.ObjectRef{Schema: "s", Name: "v"}},
+			{From: adapter.ObjectRef{Schema: "s", Name: "base", Type: "table"}, To: adapter.ObjectRef{Schema: "s", Name: "b"}},
+		},
+	}
+	out := joinLines(cmdResult{lines: renderLineage(g)})
+	for _, want := range []string{"s.v depends on", "s.a (table)", "s.b (view)", "s.base (table)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderLineage output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderLineageEmpty(t *testing.T) {
+	g := core.LineageGraph{Root: adapter.ObjectRef{Name: "t"}, Direction: "post"}
+	out := joinLines(cmdResult{lines: renderLineage(g)})
+	if !strings.Contains(out, "no dependencies found") {
+		t.Errorf("empty graph should say none, got %q", out)
 	}
 }

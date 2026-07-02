@@ -66,6 +66,15 @@ transfer).
 
 ## GUI frontend (architecture note)
 
+> **Decided (2026-06-30).** The GUI is now a scheduled extension, not just a backlog
+> note. Direction chosen: a **native Go toolkit (Fyne recommended), bound directly to
+> `core`** and shipped as a **separate `-tags gui` build artifact**; an **assist
+> channel + live-session MCP transport** lets an AI guide the user in either the GUI
+> or the CLI. See `mcli-design.md` §25–§28 and PLAN.md Phases 12–15. The trade-off
+> analysis below stands as the rationale; "Durable options" is resolved in favor of a
+> direct-binding native GUI (option 2's spirit, native rather than Wails/webview),
+> with MCP kept for the AI-assist channel only — not as the GUI's data pipe.
+
 A likely larger future direction: a graphical front-end. The original thought was to
 have it drive the CLI **through MCP** under the hood. Feasibility is high; the design
 already anticipates extra front-ends. The notes below capture the trade-offs so the

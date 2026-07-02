@@ -80,3 +80,22 @@ func TestBuildDSNRequiresHost(t *testing.T) {
 		t.Error("buildDSN without host or connection string should error")
 	}
 }
+
+func TestCapabilities(t *testing.T) {
+	caps := (&Adapter{}).Capabilities()
+	if !caps.Has(adapter.CapSource) {
+		t.Error("Oracle should advertise CapSource")
+	}
+	if !caps.Has(adapter.CapJobs) {
+		t.Error("Oracle should advertise CapJobs (DBMS_SCHEDULER)")
+	}
+	if !caps.Has(adapter.CapSecurity) {
+		t.Error("Oracle should advertise CapSecurity")
+	}
+	if !caps.Has(adapter.CapSecurityEdit) {
+		t.Error("Oracle should advertise CapSecurityEdit")
+	}
+	if caps.Has(adapter.CapTableFunctions) {
+		t.Error("Oracle table-function detection is deferred; CapTableFunctions must not be advertised")
+	}
+}

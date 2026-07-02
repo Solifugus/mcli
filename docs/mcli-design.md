@@ -559,11 +559,40 @@ type Adapter interface {
     GetPreLineage(ctx context.Context, name string) ([]ObjectRef, error)
     GetPostLineage(ctx context.Context, name string) ([]ObjectRef, error)
 
-    Dialect() Dialect   // selects the Chroma lexer and quoting rules
+    Capabilities() CapabilitySet   // optional features this adapter advertises
+    Dialect() Dialect              // selects the Chroma lexer and quoting rules
 }
 ```
 
 Import/export is implemented once in `core/transfer` against `RowStream` and `RunStatement`, not per adapter, so format support is uniform across databases. Adapters register themselves into a registry keyed by `type`; CGo adapters (e.g. a DB2 build) register only when their build tag is present.
+
+### 22.1 Capability model (Phase 16)
+
+The four-area expansion (Data / Processing / Scheduling / Security — §29) leans on
+features that vary by engine: some databases have EXPLAIN, some a job scheduler,
+some none. Front-ends need to know *up front* what a connected server supports — the
+GUI greys out an unavailable nav area, the CLI's `.caps` lists it, MCP's
+`get_capabilities` reports it — rather than probing each feature with a call that
+returns `ErrUnsupported`.
+
+The model is **hybrid**:
+
+- **Advertising.** `Capabilities() CapabilitySet` on the base interface is the single
+  source of truth a front-end reads. `Capability` is an enum
+  (`explain`, `lineage`, `source`, `table_functions`, `jobs`, `security`,
+  `security_edit`); `adapter.AllCapabilities()` lists them in display order.
+- **Implementing.** Heavy new method groups do **not** bloat the base interface;
+  they are added as opt-in interfaces (`AdapterSource`, `AdapterJobs`,
+  `AdapterSecurity`) that an adapter implements and simultaneously advertises. The
+  base stays lean, so adding a driver doesn't mean stubbing thirty methods.
+- **Two failure modes.** `ErrUnsupported` means the engine can't (an unadvertised
+  capability); `ErrUnauthorized` means it can but the current login lacks the catalog
+  privileges. Front-ends report these differently ("this database can't" vs. "you
+  lack permission"). A capability reflects engine ability, not the login's grants.
+
+The core re-exposes the set (`Core.Capabilities`, `Core.Supports`) and surfaces the
+already-interface-level `Explain` / `PreLineage` / `PostLineage` so all three
+front-ends share one path.
 
 ## 23. Design Principles
 
@@ -640,3 +669,220 @@ Import/export is implemented once in `core/transfer` against `RowStream` and `Ru
 ### Phase 11 — Live-table grid editing (optional / later)
 
 * PK-aware editable grid that generates DML through the safety layer, if and when it proves worth the cost over `.edit` + `.run`.
+
+> The phases below (12–15) extend the original 11-phase plan to add a graphical
+> front-end and an AI guidance channel. They were scoped after Phases 1–10 shipped;
+> see §25–§28 for the design they implement.
+
+### Phase 12 — Unified object finder (core + adapters)
+
+* Generalize the schema-listing surface into one typed search: `core.SearchObjects(types, substring)` over a new adapter `SearchObjects` / `ListObjects` that covers tables, views, **and procedures/functions** (new adapter capability), folding in the existing `ListTables` / `ListViews` / `SearchViews`.
+* Surface it in all three front-ends: a `.objects` / `.find` REPL command (type filters + substring), a `search_objects` MCP tool, and — later — the GUI's checkbox-and-search panel (§25). Headless-testable; no GUI required.
+
+### Phase 13 — Assist channel + live AI session (§26)
+
+* Add `internal/core/assist`: a UI-agnostic event bus and a small guidance vocabulary (`Highlight`, `Focus`, `Prefill`, `Annotate`, `Demo`) keyed by **semantic target ids**.
+* Give the *running* app a local-socket / loopback-HTTP MCP transport so the AI attaches to the **live** core (not a fresh one), and add `ui_describe_screen` / `ui_highlight` / `ui_prefill` / `ui_demo` tools that publish assist events and read the active screen model.
+* Wire the **TUI** as the first assist renderer (prefill the input line, highlight panels, print numbered demo steps) — this fully delivers "the AI guides the user in the CLI" before any GUI exists.
+
+### Phase 14 — Native GUI shell (§25)
+
+* `internal/gui`, a native front-end (Fyne recommended) launched by `mcli gui`, **behind a build tag** so the default binary stays pure-Go / no-CGo. It binds `core` **directly** (full `RowStream` access — no RPC for data).
+* Object browser (tree + the Phase-12 finder), server connect dialog (passwords via the existing sources), paged query grid over `RowStream`, SQL editor, import/export dialogs. Safety guards inherited from core, identical to the TUI.
+
+### Phase 15 — GUI assist renderer + AI-guided demos (§26)
+
+* The GUI subscribes to the assist channel: a canvas overlay for pulse/highlight, programmatic focus/prefill, and step-through coachmarks, all driven by a registry mapping semantic target ids to widgets.
+* The same `ui_*` tools that already drive the TUI now drive the GUI — the AI can blink a button, pre-fill a field, or walk the user through a task step by step as they watch.
+
+## 25. GUI Front-End
+
+A third front-end, alongside the TUI and MCP server, that reflects the same capabilities through a graphical window. The CLI/TUI remains the primary tool; the GUI is an additional surface, not a replacement, and — like the MCP server — it is a thin client of `internal/core`. No domain logic, safety rule, or adapter behavior is reimplemented in it.
+
+### Toolkit and the build-story trade-off
+
+The GUI is a **native** toolkit, decided deliberately over a browser/webview route. **Fyne** is the recommended toolkit (rich built-in widgets — `widget.Table` for result grids, `widget.Tree` for the schema browser, forms, tabs, split panes, dialogs — plus a canvas/overlay model that the assist layer in §26 needs). **Gio** is the alternative if a lighter, lower-level immediate-mode core is preferred; it costs more widget-building work. Either way the choice has one consequence that must be owned up front:
+
+* mcli's identity is *one self-contained, pure-Go, no-CGo, cross-compiles-everywhere* binary. Native GUI toolkits pull in **CGo** (OpenGL / platform windowing) and a per-platform C cross-toolchain.
+* Therefore the GUI is a **separate build artifact behind a build tag** (`-tags gui`), exactly like the DB2 adapter. The default `go build ./cmd/mcli` stays pure-Go and unaffected; `mcli gui` exists only in the tagged build. The CLI/MCP binary and the GUI binary are different distribution targets, by design, not a regression.
+
+**Implemented (Phase 14).** `internal/gui` is the Fyne front-end; `cmd/mcli` gets a `gui` subcommand split into `gui_run.go` (`//go:build gui`) and `gui_stub.go` (`//go:build !gui`), so the pure-Go binary answers `mcli gui` with a "rebuild with -tags gui" error instead of dragging in CGo. The tagged build's Linux prerequisites are a C toolchain and the X11 dev headers (`libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev` and their `Xrender`/`Xfixes` deps); macOS/Windows use their native windowing. All panes live as files in the single `internal/gui` package (not the sub-packages sketched below) because they share one window + one `*core.Core` and gain nothing from package isolation — the separation of concerns is at the file boundary. The result grid is a `widget.Table` fed straight from `RowStream` (retention capped at `gridFetchCap`); the safety guard is rendered as dialogs (Block → info, Confirm → yes/no) driven by `core.GuardStatement`, identical to the TUI.
+
+### Direct-core binding (why the GUI does *not* go through MCP)
+
+The GUI is Go and runs in the same process as the core, so it **calls `core` directly** — no JSON-RPC translation, full streaming `RowStream` access. This resolves the open question the roadmap raised: MCP's request/response tools are wrong for a data grid (single capped blob, no cursor, confirmation signaled via an error string). By binding the core directly, the GUI gets virtual-scroll/pagination over the real cursor and a structured confirmation flow for free, and **MCP is left to do only what it is good at** — being the AI's channel (§26), not the GUI's data pipe.
+
+```text
+[ one mcli process, one *core.Core ]
+   core ──┬── internal/gui   (native window, direct calls, RowStream)
+          ├── internal/tui   (in-process, when launched as TUI instead)
+          └── internal/mcp   (AI attaches over a local transport — §26)
+```
+
+### Module layout
+
+```text
+internal/gui/            native front-end (build tag: gui)
+  app/                   window, navigation, mode wiring; holds *core.Core
+  browser/               object browser: schema tree + typed object finder (§27)
+  grid/                  paged result table over RowStream (virtual scroll)
+  editor/                SQL editor pane (reuse highlight/lint via core)
+  connect/               server connect + password dialog (existing sources)
+  transfer/              import / export dialogs
+  assist/                assist-channel renderer + widget registry (§26)
+```
+
+### Surface parity
+
+The GUI exposes the same capabilities as the REPL commands, mapped to graphical equivalents: workspace switcher, server list + connect dialog, database/schema navigation, the object finder (§27), query editor + paged grid, saved SQL files, import/export, lineage, lint, and AI assist. Every data path runs through the same core methods and the same safety guards (§17) — read-only mode, dangerous-SQL confirmation, and production write guards behave identically to the TUI, because they live in the core.
+
+## 26. Assist Channel & Live AI Session
+
+The requirement: an AI (through MCP) can guide the user **in the surface they are actually looking at** — blink the button to press, pre-fill a field or the input line, or step through a task as the user watches — in **both** the GUI and the CLI.
+
+### The problem it solves
+
+Today the MCP server is a *separate process with its own `core`* (`mcli mcp serve` opens a fresh one over stdio). An AI on that channel cannot see or touch the user's live session, so it cannot guide it. Guidance requires a **shared live session**: the AI must operate on the same `*core.Core` the user's front-end holds.
+
+### Live-session transport
+
+The *running* app (GUI or TUI) optionally hosts an MCP endpoint over a **local transport**, bound to the live core, so an external AI client can attach while the app keeps running. The headless `mcli mcp serve` (own core, stdio) stays as-is for agent automation; the live endpoint is the new, opt-in path for in-session guidance. The same safety settings (§17) apply on either path.
+
+**Decided (implemented): MCP Streamable HTTP.** Because the goal is *heterogeneous* agents — the user's own agent (Conatus) plus any other MCP client — the transport is the MCP standard remote transport (Streamable HTTP: JSON-RPC 2.0 over HTTP POST to a single endpoint), not a bespoke socket. This matches the `2025-06-18` protocol version the server already advertises, and reuses the exact same dispatch/tool layer as the stdio transport — only the framing differs (`internal/mcp/http.go`). Concretely:
+
+- **Loopback-only** (`127.0.0.1`), never `0.0.0.0`.
+- **Per-session bearer token**, required on every request; the URL + token are written to `~/.mcli/session.json` (mode 0600) so a co-operating agent can discover the live session.
+- **`Origin` validation** (loopback origins only) to defeat DNS-rebinding from a browser.
+- **Opt-in**: off by default (mcli may be on production); enabled in the TUI with `.assist on` / stopped with `.assist off` (also torn down, and `session.json` removed, on quit). Server→client SSE streaming is a later addition and is not required for tool calls.
+
+Guidance never bypasses safety: every tool routes through the same core as the TUI, so read-only mode, dangerous-SQL confirmation, and production guards apply to an attached agent exactly as they do to the user. (Cross-goroutine mutation of the shared core between the TUI's command goroutines and the HTTP endpoint is serialized within the endpoint today; a coarse core-level lock around connection lifecycle is the planned hardening before the live session drives DML concurrently with the user.)
+
+### Assist vocabulary (UI-agnostic, in `internal/core/assist`)
+
+A small event bus and a guidance vocabulary, defined once in the core so every front-end renders the same primitives its own way. Targets are **semantic ids**, never pixel coordinates or widget pointers:
+
+```text
+Highlight{ target }            draw attention to an element (pulse / blink)
+Focus{ target }                move focus to an element
+Prefill{ target, text }        put text into an input (don't submit)
+Annotate{ target, text }       attach an explanatory callout
+Demo{ steps:[ Step{title, description, target, action} ] }
+                               an ordered, narrated walkthrough
+```
+
+Semantic target ids form a stable contract, e.g. `input-line`, `btn-run`,
+`panel-objects`, `field-host`, `grid`, `editor`. Each front-end keeps a **registry**
+mapping these ids to its own renderable elements.
+
+### Per-front-end rendering
+
+| primitive | GUI (Fyne) | TUI (Bubble Tea) |
+| --- | --- | --- |
+| `Highlight` | pulsing overlay border / coachmark over the widget | blink / reverse-video the panel or input |
+| `Focus` | `canvas.Focus(widget)` | route key focus to that surface |
+| `Prefill` | `entry.SetText(...)` | pre-load the readline buffer (unsubmitted) |
+| `Annotate` | popup callout anchored to the widget | printed note referencing the element |
+| `Demo` | step-through overlay with Next/Back | printed numbered steps + auto-prefill per step |
+
+Because the vocabulary and target ids are shared, the **same** AI actions work in both surfaces — "guide me in the CLI" and "guide me in the GUI" are one mechanism, not two.
+
+### MCP tools for guidance
+
+The live endpoint adds a small UI-control tool family, available only when attached to a running app (they no-op / report "no live session" on the headless server):
+
+```text
+ui_describe_screen   read the active surface's element registry + current state
+ui_highlight         emit Highlight{target}
+ui_focus             emit Focus{target}
+ui_prefill           emit Prefill{target, text}
+ui_annotate          emit Annotate{target, text}
+ui_demo              emit Demo{steps}
+```
+
+`ui_describe_screen` is what lets the AI *plan*: it returns which semantic targets exist on the current surface and their state, so the AI chooses valid targets rather than guessing. All guidance is **non-destructive by default** — `Prefill` never submits, demos advance only as the user proceeds — so guidance can never bypass the safety guards in §17.
+
+## 27. Object Finder
+
+A unified, typed object search — the capability the GUI motivates but that belongs in the core so all three front-ends share it. Replaces the scattered `ListTables` / `ListViews` / `SearchViews` calls with one query: *objects whose type is in {…} and whose name contains "…"*.
+
+### Adapter capability
+
+The adapter interface gains procedure/function awareness and one search entry point:
+
+```go
+type ObjectKind string // "table" | "view" | "procedure" | "function" | ...
+
+// SearchObjects returns objects whose Type is in kinds (empty = all kinds) and
+// whose name contains substr (case-insensitive, empty = all names).
+SearchObjects(ctx context.Context, kinds []ObjectKind, substr string) ([]ObjectRef, error)
+```
+
+`ListTables` / `ListViews` remain as thin convenience wrappers over it. Each adapter implements `SearchObjects` with its own catalog query (e.g. `information_schema` / `pg_catalog` / `ALL_OBJECTS`); kinds an engine lacks simply return nothing.
+
+### Core and front-end surfaces
+
+* **Core:** `core.SearchObjects(ctx, kinds, substr)`, safety-neutral (read-only catalog reads).
+* **TUI:** a `.objects` / `.find` command with type flags and a substring argument.
+* **MCP:** a `search_objects` tool (`kinds[]`, `substring`).
+* **GUI:** the panel the user described — **a row of type checkboxes (Tables / Views / Procedures / Functions …) plus a search box**, results in a list/tree that feeds Describe, query, lineage, and editor actions.
+
+## 28. Front-End Parity Principle
+
+With three front-ends, the load-bearing rule is sharpened: **a capability lands in `internal/core` (and its safety layer) exactly once; every front-end is a thin renderer of it.** The GUI must not grow a private query path, a private safety check, or a private adapter call. New work is "add a core method (+ adapter method if needed), then render it in each surface that wants it" — never "implement it in the GUI." This is what keeps the TUI, GUI, and MCP behaviorally identical and the core the single contract.
+
+## 29. Capability-Area Expansion (Phases 16–22)
+
+A second wave of features, organized as **four areas** the GUI presents through a
+nav dropdown and the CLI through command groups. Each area is a core capability
+first; the GUI consumes it later (§28).
+
+- **Data** — anything tabular: tables, views, and table-valued functions. Search by
+  object name (`SearchObjects`) or column name (`SearchColumns`); toggle data
+  (`RunQuery`) vs. design (`DescribeObject`). New: TVF classification (§18-phase).
+  The horizontal/vertical transpose is presentation only — the core returns rows +
+  columns; the front-end swaps axes.
+- **Processing** — stored procedures. Search names or **within bodies** (generalizing
+  the existing view-definition grep); show procedure **source** (new `AdapterSource`
+  primitive, shared with Data-design); a lineage flow chart (implemented, §22-phase).
+  Each adapter supplies one-hop `GetPreLineage`/`GetPostLineage` from its dependency
+  catalog (PG `pg_depend`/`pg_rewrite`, SQL Server `sys.sql_expression_dependencies`,
+  Oracle `all_dependencies`, MySQL `information_schema.VIEW_TABLE_USAGE` — views only;
+  DB2 deferred), advertised via `CapLineage`. **The core assembles the graph**:
+  `Lineage(name, dir, depth)` walks the one-hop accessors breadth-first — cycle-safe,
+  bounded by depth and node count (reporting `Truncated`), with edges normalized to
+  data-flow direction (source → consumer) so a pre-walk and a post-walk over the same
+  objects yield the same edge set. The front-end draws the graph (CLI `.pre-lineage`/
+  `.post-lineage` render it as an indented tree; MCP `get_lineage` returns the edges as
+  JSON); the core supplies edges. This is the last of the four-area primitives.
+- **Scheduling** — jobs/agents (implemented, §19-phase). `AdapterJobs`
+  (`ListJobs`/`DescribeJob`/`JobHistory`) advertised via `CapJobs`, with `JobRef`/
+  `Job`/`JobStep`/`JobRun` value types. The most engine-divergent area: SQL Server
+  Agent (msdb catalog; packed-int date/time/duration formatted in Go) and Oracle
+  DBMS_SCHEDULER map cleanly, MySQL has Events (no run history — `JobHistory` returns
+  empty, not an error), Postgres has **no native scheduler** so the whole area greys
+  out via the capability set (it does not implement the interface). DB2's
+  Administrative Task Scheduler is deferred (frequently unconfigured). CLI `.jobs` /
+  `.job [--history]`; MCP `list_jobs`/`describe_job`/`job_history`.
+- **Security** — users, roles, grants. `AdapterSecurity`
+  (`ListPrincipals`/`DescribePrincipal`) read-side is implemented (§20-phase) and
+  advertised via `CapSecurity`, with `PrincipalRef`/`Principal`/`Grant` value types
+  and a user/role split mapped per engine: Postgres roles (login = user, no-login =
+  role, live-verified via `pg_roles`/`pg_auth_members`), SQL Server
+  `sys.database_principals`, Oracle `dba_*` views (needs catalog privilege —
+  `ErrUnauthorized` vs `ErrUnsupported`), MySQL `mysql.user` + `SHOW GRANTS` (roles
+  best-effort). DB2 is deferred (OS-based authorization, a different model). CLI
+  `.users`/`.roles`/`.user`/`.role`; MCP `list_principals`/`describe_principal`.
+  Editing (§21-phase, `CapSecurityEdit`) is implemented as **pure, dialect-aware DCL
+  builders** (`GrantStatement`/`CreateUserStatement`/`DropUserStatement` in
+  `adapter/securityedit.go`, with identifier/privilege validation and password-literal
+  escaping that reject injection). Crucially the builders only *build*: every generated
+  GRANT/REVOKE/CREATE/DROP is executed back through the **single guarded path**
+  (`GuardStatement` + `RunStatement`), so read-only mode **blocks** it, production
+  **confirms**, and DROP is treated as **dangerous** — no second, unguarded execution
+  path exists. CLI `.grant`/`.revoke`/`.createuser`/`.dropuser` (which echo the
+  generated statement before running it under the guard); MCP `grant`/`create_user`/
+  `drop_user` (build then run via the same guarded runner with a `confirm` flag).
+
+The capability model of §22.1 is what lets a front-end offer or grey out each area
+per connected engine. Build order and task state live in `PLAN.md`; the sequencing
+decision was **core primitives first**, ahead of the Phase 15 GUI assist renderer.
