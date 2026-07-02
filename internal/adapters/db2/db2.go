@@ -123,17 +123,58 @@ func (a *Adapter) ListSchemas(ctx context.Context) ([]string, error) {
 }
 
 func (a *Adapter) ListTables(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "table",
-		`SELECT TRIM(tabschema), TRIM(tabname) FROM syscat.tables
-		 WHERE type = 'T' AND tabschema = CURRENT SCHEMA
-		 ORDER BY tabschema, tabname`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindTable}, "")
+}
+
+// SearchObjects is the typed object finder (design §27). Each requested kind
+// runs its own catalog query scoped to the current schema and filtered by a
+// case-insensitive name substring (Db2 identifiers are upper-cased, so the
+// needle is UCASE()'d, matching SearchColumns/SearchViews); results are
+// concatenated in kind order. Procedures/functions come from syscat.routines.
+func (a *Adapter) SearchObjects(ctx context.Context, kinds []adapter.ObjectKind, substr string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	if len(kinds) == 0 {
+		kinds = adapter.AllObjectKinds()
+	}
+	var out []adapter.ObjectRef
+	for _, k := range kinds {
+		var sql string
+		switch k {
+		case adapter.KindTable:
+			sql = `SELECT TRIM(tabschema), TRIM(tabname) FROM syscat.tables
+			       WHERE type = 'T' AND tabschema = CURRENT SCHEMA
+			         AND tabname LIKE '%' || UCASE(?) || '%'
+			       ORDER BY tabschema, tabname`
+		case adapter.KindView:
+			sql = `SELECT TRIM(tabschema), TRIM(tabname) FROM syscat.tables
+			       WHERE type = 'V' AND tabschema = CURRENT SCHEMA
+			         AND tabname LIKE '%' || UCASE(?) || '%'
+			       ORDER BY tabschema, tabname`
+		case adapter.KindProcedure, adapter.KindFunction:
+			rt := "P"
+			if k == adapter.KindFunction {
+				rt = "F"
+			}
+			sql = `SELECT TRIM(routineschema), TRIM(routinename) FROM syscat.routines
+			       WHERE routinetype = '` + rt + `' AND routineschema = CURRENT SCHEMA
+			         AND routinename LIKE '%' || UCASE(?) || '%'
+			       ORDER BY routineschema, routinename`
+		default:
+			continue
+		}
+		refs, err := a.queryObjects(ctx, string(k), sql, substr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
 }
 
 func (a *Adapter) ListViews(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "view",
-		`SELECT TRIM(tabschema), TRIM(tabname) FROM syscat.tables
-		 WHERE type = 'V' AND tabschema = CURRENT SCHEMA
-		 ORDER BY tabschema, tabname`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindView}, "")
 }
 
 // DescribeObject returns columns for a table or view, marking primary-key
@@ -291,6 +332,93 @@ func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, e
 
 func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
 	return nil, adapter.ErrUnsupported
+}
+
+// Source returns the definition text of a view (syscat.views.text) or a
+// procedure/function (syscat.routines.text). Tables have no such text — use
+// DescribeObject.
+func (a *Adapter) Source(ctx context.Context, name string) (adapter.ObjectSource, error) {
+	if a.db == nil {
+		return adapter.ObjectSource{}, errNotConnected
+	}
+	rawSchema, obj := splitName(name)
+	obj = strings.ToUpper(obj)
+	schema, err := a.resolveSchema(ctx, rawSchema)
+	if err != nil {
+		return adapter.ObjectSource{}, err
+	}
+
+	var vs, vn, vtext string
+	err = a.db.QueryRowContext(ctx,
+		`SELECT TRIM(viewschema), TRIM(viewname), text FROM syscat.views
+		 WHERE viewname = ? AND viewschema = ?
+		 FETCH FIRST 1 ROWS ONLY`, obj, schema).Scan(&vs, &vn, &vtext)
+	if err == nil {
+		return adapter.ObjectSource{
+			Ref:      adapter.ObjectRef{Schema: vs, Name: vn, Type: string(adapter.KindView)},
+			Language: "sql",
+			Body:     strings.TrimSpace(vtext),
+		}, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return adapter.ObjectSource{}, err
+	}
+
+	var rs, rn, rtype, rtext string
+	err = a.db.QueryRowContext(ctx,
+		`SELECT TRIM(routineschema), TRIM(routinename), routinetype, text FROM syscat.routines
+		 WHERE routinename = ? AND routineschema = ?
+		 FETCH FIRST 1 ROWS ONLY`, obj, schema).Scan(&rs, &rn, &rtype, &rtext)
+	if err == nil {
+		kind := adapter.KindFunction
+		if strings.TrimSpace(rtype) == "P" {
+			kind = adapter.KindProcedure
+		}
+		return adapter.ObjectSource{
+			Ref:      adapter.ObjectRef{Schema: rs, Name: rn, Type: string(kind)},
+			Language: "sql",
+			Body:     strings.TrimSpace(rtext),
+		}, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return adapter.ObjectSource{}, err
+	}
+	return adapter.ObjectSource{}, fmt.Errorf("db2: no view, procedure, or function named %q", name)
+}
+
+// SearchRoutines finds procedures/functions whose name or body matches text.
+func (a *Adapter) SearchRoutines(ctx context.Context, text string) ([]adapter.ObjectRef, error) {
+	var out []adapter.ObjectRef
+	for _, rt := range []struct{ kind, typ string }{
+		{string(adapter.KindProcedure), "P"},
+		{string(adapter.KindFunction), "F"},
+	} {
+		refs, err := a.queryObjects(ctx, rt.kind,
+			`SELECT TRIM(routineschema), TRIM(routinename) FROM syscat.routines
+			 WHERE routinetype = '`+rt.typ+`' AND routineschema = CURRENT SCHEMA
+			   AND (routinename LIKE '%' || UCASE(?) || '%' OR text LIKE '%' || ? || '%')
+			 ORDER BY routineschema, routinename`, text, text)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
+}
+
+// SearchTableFunctions finds table functions (syscat.routines.functiontype = 'T'),
+// read as SELECT * FROM TABLE(f(...)).
+func (a *Adapter) SearchTableFunctions(ctx context.Context, substr string) ([]adapter.ObjectRef, error) {
+	return a.queryObjects(ctx, string(adapter.KindTableFunction),
+		`SELECT TRIM(routineschema), TRIM(routinename) FROM syscat.routines
+		 WHERE routinetype = 'F' AND functiontype = 'T'
+		   AND routineschema = CURRENT SCHEMA
+		   AND routinename LIKE '%' || UCASE(?) || '%'
+		 ORDER BY routineschema, routinename`, substr)
+}
+
+// Capabilities: DB2 supports EXPLAIN, source retrieval, and table functions.
+// Lineage, jobs, and security introspection are not yet implemented.
+func (a *Adapter) Capabilities() adapter.CapabilitySet {
+	return adapter.Caps(adapter.CapExplain, adapter.CapSource, adapter.CapTableFunctions)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectDB2 }

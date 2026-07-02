@@ -113,6 +113,76 @@ func (m *Model) cmdList(args []string) (cmdResult, asyncRun) {
 	}
 }
 
+// cmdObjects is the typed object finder (§27): filter by kind (any combination
+// of tables/views/procedures/functions, default all) and by a name substring.
+//
+//	.objects [tables] [views] [procedures] [functions] [<substring>]
+//	.find    order            # any kind whose name contains "order"
+//	.find    views procedures order
+func (m *Model) cmdObjects(args []string) (cmdResult, asyncRun) {
+	kinds, substr, errMsg := parseObjectArgs(args)
+	if errMsg != "" {
+		return out(errMsg), nil
+	}
+	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	color, dark := m.colorPrompt, m.darkBG
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		refs, err := c.SearchObjects(ctx, kinds, substr)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		if len(refs) == 0 {
+			return asyncResultMsg{lines: []string{"no matching objects"}}
+		}
+		rows := make([][]string, 0, len(refs))
+		for _, r := range refs {
+			name := r.Name
+			if r.Schema != "" {
+				name = r.Schema + "." + r.Name
+			}
+			rows = append(rows, []string{r.Type, name})
+		}
+		lines, _ := renderResultTable([]string{"type", "object"}, rows, termWidth)
+		return asyncResultMsg{lines: styleTable(lines, color, dark)}
+	}
+}
+
+// objectKindKeywords maps the accepted command tokens (singular, plural, and
+// short forms) to their ObjectKind.
+var objectKindKeywords = map[string]adapter.ObjectKind{
+	"table": adapter.KindTable, "tables": adapter.KindTable,
+	"view": adapter.KindView, "views": adapter.KindView,
+	"procedure": adapter.KindProcedure, "procedures": adapter.KindProcedure,
+	"proc": adapter.KindProcedure, "procs": adapter.KindProcedure,
+	"function": adapter.KindFunction, "functions": adapter.KindFunction,
+	"func": adapter.KindFunction, "funcs": adapter.KindFunction,
+}
+
+// parseObjectArgs splits .objects/.find arguments into kind filters and a single
+// name substring. Kind tokens may appear in any order; at most one non-kind
+// token (the substring) is allowed. No kinds means "all kinds".
+func parseObjectArgs(args []string) (kinds []adapter.ObjectKind, substr, errMsg string) {
+	seen := map[adapter.ObjectKind]bool{}
+	for _, a := range args {
+		if k, ok := objectKindKeywords[strings.ToLower(a)]; ok {
+			if !seen[k] {
+				seen[k] = true
+				kinds = append(kinds, k)
+			}
+			continue
+		}
+		if substr != "" {
+			return nil, "", `usage: .objects [tables] [views] [procedures] [functions] [<substring>]`
+		}
+		substr = a
+	}
+	return kinds, substr, ""
+}
+
 func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 	if len(args) < 1 {
 		return out(`usage: .describe <table>`), nil
@@ -140,6 +210,426 @@ func (m *Model) cmdDescribe(args []string) (cmdResult, asyncRun) {
 		lines, _ := renderResultTable([]string{"column", "type", "nullable", "key"}, rows, termWidth)
 		return asyncResultMsg{lines: styleTable(lines, color, dark)}
 	}
+}
+
+// cmdSource shows the definition text of a view, procedure, or function
+// (Processing-code / Data-design). It needs the connected engine to support
+// source retrieval (CapSource); tables have no stored definition (use .describe).
+func (m *Model) cmdSource(args []string) (cmdResult, asyncRun) {
+	if len(args) < 1 {
+		return out(`usage: .source <view|procedure|function>`), nil
+	}
+	if m.core.Connected() && !m.core.Supports(adapter.CapSource) {
+		return out("this server does not support source retrieval (see .caps)"), nil
+	}
+	name := args[0]
+	c := m.core
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		src, err := c.Source(ctx, name)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		header := "-- " + name
+		if src.Language != "" {
+			header += " (" + src.Language + ")"
+		}
+		lines := append([]string{header}, strings.Split(src.Body, "\n")...)
+		return asyncResultMsg{lines: lines}
+	}
+}
+
+// cmdGrep searches within procedure/function bodies (and their names) for a
+// substring — the Processing-area body search. Like .source it needs CapSource.
+func (m *Model) cmdGrep(args []string) (cmdResult, asyncRun) {
+	if len(args) < 1 {
+		return out(`usage: .grep <text>   (searches procedure/function names and bodies)`), nil
+	}
+	if m.core.Connected() && !m.core.Supports(adapter.CapSource) {
+		return out("this server does not support body search (see .caps)"), nil
+	}
+	text := strings.Join(args, " ")
+	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	color, dark := m.colorPrompt, m.darkBG
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		refs, err := c.SearchRoutines(ctx, text)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		if len(refs) == 0 {
+			return asyncResultMsg{lines: []string{"no matching routines"}}
+		}
+		rows := make([][]string, 0, len(refs))
+		for _, r := range refs {
+			name := r.Name
+			if r.Schema != "" {
+				name = r.Schema + "." + r.Name
+			}
+			rows = append(rows, []string{r.Type, name})
+		}
+		lines, _ := renderResultTable([]string{"type", "routine"}, rows, termWidth)
+		return asyncResultMsg{lines: styleTable(lines, color, dark)}
+	}
+}
+
+// cmdTableFuncs lists table-valued functions and, for each, the dialect-correct
+// query template that reads it as tabular data — the Data-area view of TVFs. It
+// needs the connected engine to support table functions (CapTableFunctions).
+func (m *Model) cmdTableFuncs(args []string) (cmdResult, asyncRun) {
+	if m.core.Connected() && !m.core.Supports(adapter.CapTableFunctions) {
+		return out("this server does not support table functions (see .caps)"), nil
+	}
+	substr := ""
+	if len(args) > 0 {
+		substr = args[0]
+	}
+	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	color, dark := m.colorPrompt, m.darkBG
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		refs, err := c.SearchTableFunctions(ctx, substr)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		if len(refs) == 0 {
+			return asyncResultMsg{lines: []string{"no matching table functions"}}
+		}
+		rows := make([][]string, 0, len(refs))
+		for _, r := range refs {
+			name := r.Name
+			if r.Schema != "" {
+				name = r.Schema + "." + r.Name
+			}
+			rows = append(rows, []string{name, c.TabularQuery(r)})
+		}
+		lines, _ := renderResultTable([]string{"table function", "query template"}, rows, termWidth)
+		return asyncResultMsg{lines: styleTable(lines, color, dark)}
+	}
+}
+
+// cmdJobs lists scheduled jobs (SQL Server Agent jobs, Oracle Scheduler jobs,
+// MySQL events) — the Scheduling area's listing. It needs the connected engine to
+// expose a scheduler (CapJobs); engines without one (e.g. Postgres) grey it out.
+func (m *Model) cmdJobs(args []string) (cmdResult, asyncRun) {
+	if m.core.Connected() && !m.core.Supports(adapter.CapJobs) {
+		return out("this server does not expose scheduled jobs (see .caps)"), nil
+	}
+	substr := ""
+	if len(args) > 0 {
+		substr = args[0]
+	}
+	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	color, dark := m.colorPrompt, m.darkBG
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		jobs, err := c.ListJobs(ctx, substr)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		if len(jobs) == 0 {
+			return asyncResultMsg{lines: []string{"no matching jobs"}}
+		}
+		rows := make([][]string, 0, len(jobs))
+		for _, j := range jobs {
+			rows = append(rows, []string{j.Name, onOff(j.Enabled), j.Schedule})
+		}
+		lines, _ := renderResultTable([]string{"job", "enabled", "schedule"}, rows, termWidth)
+		return asyncResultMsg{lines: styleTable(lines, color, dark)}
+	}
+}
+
+// cmdJob shows a single job's design, or — with --history [N] — its recent run
+// history. It is the Scheduling-area detail view (design or history-to-present).
+//
+//	.job <name>                 # design: owner, schedule, next/last run, steps
+//	.job <name> --history [N]   # recent runs, newest first (N caps the count)
+func (m *Model) cmdJob(args []string) (cmdResult, asyncRun) {
+	if len(args) < 1 {
+		return out(`usage: .job <name> [--history [N]]`), nil
+	}
+	if m.core.Connected() && !m.core.Supports(adapter.CapJobs) {
+		return out("this server does not expose scheduled jobs (see .caps)"), nil
+	}
+	name := args[0]
+	history := false
+	limit := 0
+	for _, a := range args[1:] {
+		switch a {
+		case "--history", "history", "-h":
+			history = true
+		default:
+			if history {
+				if n, err := strconv.Atoi(a); err == nil {
+					limit = n
+				}
+			}
+		}
+	}
+	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	color, dark := m.colorPrompt, m.darkBG
+	if history {
+		return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+			runs, err := c.JobHistory(ctx, name, limit)
+			if err != nil {
+				return asyncResultMsg{err: err}
+			}
+			if len(runs) == 0 {
+				return asyncResultMsg{lines: []string{"no run history for " + name}}
+			}
+			rows := make([][]string, 0, len(runs))
+			for _, r := range runs {
+				rows = append(rows, []string{r.Start, r.Status, r.Message})
+			}
+			lines, _ := renderResultTable([]string{"start", "status", "message"}, rows, termWidth)
+			return asyncResultMsg{lines: styleTable(lines, color, dark)}
+		}
+	}
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		job, err := c.DescribeJob(ctx, name)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		lines := []string{
+			"job:      " + job.Ref.Name,
+			"enabled:  " + onOff(job.Ref.Enabled),
+		}
+		if job.Owner != "" {
+			lines = append(lines, "owner:    "+job.Owner)
+		}
+		if job.Ref.Schedule != "" {
+			lines = append(lines, "schedule: "+job.Ref.Schedule)
+		}
+		if job.NextRun != "" {
+			lines = append(lines, "next run: "+job.NextRun)
+		}
+		if job.LastRun != "" {
+			lines = append(lines, "last run: "+job.LastRun)
+		}
+		if job.Comment != "" {
+			lines = append(lines, "comment:  "+job.Comment)
+		}
+		for _, st := range job.Steps {
+			lines = append(lines, "", "-- step: "+st.Name)
+			lines = append(lines, strings.Split(st.Command, "\n")...)
+		}
+		return asyncResultMsg{lines: lines}
+	}
+}
+
+// cmdPrincipals lists security principals of a given kind (users or roles) — the
+// Security area's listing. It needs the connected engine to support security
+// introspection (CapSecurity); engines without it grey out.
+func (m *Model) cmdPrincipals(args []string, kind string) (cmdResult, asyncRun) {
+	if m.core.Connected() && !m.core.Supports(adapter.CapSecurity) {
+		return out("this server does not expose security principals (see .caps)"), nil
+	}
+	substr := ""
+	if len(args) > 0 {
+		substr = args[0]
+	}
+	c := m.core
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+	color, dark := m.colorPrompt, m.darkBG
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		refs, err := c.ListPrincipals(ctx, kind, substr)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		if len(refs) == 0 {
+			return asyncResultMsg{lines: []string{"no matching " + kind + "s"}}
+		}
+		rows := make([][]string, 0, len(refs))
+		for _, r := range refs {
+			rows = append(rows, []string{r.Name, r.Kind, onOff(r.Enabled)})
+		}
+		lines, _ := renderResultTable([]string{"name", "kind", "enabled"}, rows, termWidth)
+		return asyncResultMsg{lines: styleTable(lines, color, dark)}
+	}
+}
+
+// cmdPrincipal shows a single principal's configuration: its attributes, role
+// membership, members (for a role), and grants — the Security-area detail view.
+//
+//	.user <name>   /   .role <name>
+func (m *Model) cmdPrincipal(args []string) (cmdResult, asyncRun) {
+	if len(args) < 1 {
+		return out(`usage: .user <name>   (also .role <name>)`), nil
+	}
+	if m.core.Connected() && !m.core.Supports(adapter.CapSecurity) {
+		return out("this server does not expose security principals (see .caps)"), nil
+	}
+	name := args[0]
+	c := m.core
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		p, err := c.DescribePrincipal(ctx, name)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		lines := []string{
+			"name:     " + p.Ref.Name,
+			"kind:     " + p.Ref.Kind,
+			"enabled:  " + onOff(p.Ref.Enabled),
+		}
+		if len(p.Attributes) > 0 {
+			lines = append(lines, "attrs:    "+strings.Join(p.Attributes, ", "))
+		}
+		if len(p.MemberOf) > 0 {
+			lines = append(lines, "member of: "+strings.Join(p.MemberOf, ", "))
+		}
+		if len(p.Members) > 0 {
+			lines = append(lines, "members:  "+strings.Join(p.Members, ", "))
+		}
+		if p.Comment != "" {
+			lines = append(lines, "comment:  "+p.Comment)
+		}
+		if len(p.Grants) > 0 {
+			lines = append(lines, "", "grants:")
+			for _, g := range p.Grants {
+				line := "  " + g.Privilege
+				if g.On != "" {
+					line += " ON " + g.On
+				}
+				lines = append(lines, line)
+			}
+		}
+		return asyncResultMsg{lines: lines}
+	}
+}
+
+// cmdGrant generates a GRANT (or, when revoke is true, a REVOKE) statement and
+// runs it through the guarded SQL path, so read-only mode and production guards
+// apply exactly as they do to hand-typed SQL. The generated statement is echoed
+// so the user sees precisely what will run.
+//
+//	.grant  SELECT,INSERT ON schema.t TO bob     # privilege grant
+//	.grant  read_role TO bob                      # role grant (no ON)
+//	.revoke SELECT ON schema.t FROM bob
+func (m *Model) cmdGrant(args []string, revoke bool) (cmdResult, action) {
+	usage := `usage: .grant <privs|role> [ON <object>] TO <principal>`
+	prep := "TO"
+	if revoke {
+		usage = `usage: .revoke <privs|role> [ON <object>] FROM <principal>`
+		prep = "FROM"
+	}
+	if m.core.Connected() && !m.core.Supports(adapter.CapSecurityEdit) {
+		return out("this server does not support security editing (see .caps)"), sync()
+	}
+	items, object, principal, ok := parseGrantArgs(args, prep)
+	if !ok {
+		return out(usage), sync()
+	}
+	dcl, err := m.core.BuildGrant(items, object, principal, revoke)
+	if err != nil {
+		return errOut(err), sync()
+	}
+	return m.runGeneratedDCL(dcl)
+}
+
+// cmdCreateUser generates a dialect-correct CREATE USER/LOGIN with a password and
+// runs it through the guard.
+//
+//	.createuser <name> <password>
+//	.createuser <name> password <password>
+func (m *Model) cmdCreateUser(args []string) (cmdResult, action) {
+	if m.core.Connected() && !m.core.Supports(adapter.CapSecurityEdit) {
+		return out("this server does not support security editing (see .caps)"), sync()
+	}
+	if len(args) < 2 {
+		return out(`usage: .createuser <name> <password>`), sync()
+	}
+	name := args[0]
+	pw := args[1]
+	if args[1] == "password" && len(args) > 2 {
+		pw = args[2]
+	}
+	dcl, err := m.core.BuildCreateUser(name, pw)
+	if err != nil {
+		return errOut(err), sync()
+	}
+	return m.runGeneratedDCL(dcl)
+}
+
+// cmdDropUser generates a dialect-correct DROP USER/LOGIN/ROLE and runs it through
+// the guard. DROP is flagged dangerous, so the guard confirms (or blocks on prod).
+func (m *Model) cmdDropUser(args []string) (cmdResult, action) {
+	if m.core.Connected() && !m.core.Supports(adapter.CapSecurityEdit) {
+		return out("this server does not support security editing (see .caps)"), sync()
+	}
+	if len(args) < 1 {
+		return out(`usage: .dropuser <name>`), sync()
+	}
+	dcl, err := m.core.BuildDropUser(args[0])
+	if err != nil {
+		return errOut(err), sync()
+	}
+	return m.runGeneratedDCL(dcl)
+}
+
+// runGeneratedDCL echoes a generated DCL statement and dispatches it through the
+// guarded SQL path (GuardStatement + safety confirm/block), so security editing
+// inherits the identical guardrails as any other statement — one chokepoint.
+func (m *Model) runGeneratedDCL(dcl string) (cmdResult, action) {
+	res, act := m.guardedSQL(dcl)
+	res.lines = append([]string{"-- " + dcl}, res.lines...)
+	return res, act
+}
+
+// parseGrantArgs splits ".grant/.revoke <items> [ON <object>] <prep> <principal>"
+// into its parts. items (privileges or roles) are the tokens before ON/prep,
+// re-joined and split on commas so "SELECT, INSERT" works. prep is "TO" for grant
+// or "FROM" for revoke.
+func parseGrantArgs(args []string, prep string) (items []string, object, principal string, ok bool) {
+	prepIdx, onIdx := -1, -1
+	for i, a := range args {
+		switch strings.ToUpper(a) {
+		case prep:
+			if prepIdx == -1 {
+				prepIdx = i
+			}
+		case "ON":
+			if onIdx == -1 {
+				onIdx = i
+			}
+		}
+	}
+	// Need "<items> PREP <principal>" with exactly one principal token.
+	if prepIdx < 1 || prepIdx != len(args)-2 {
+		return nil, "", "", false
+	}
+	principal = args[prepIdx+1]
+	itemEnd := prepIdx
+	if onIdx != -1 {
+		if onIdx < 1 || onIdx >= prepIdx-1 {
+			return nil, "", "", false
+		}
+		object = args[onIdx+1]
+		itemEnd = onIdx
+	}
+	for _, tok := range strings.Split(strings.Join(args[:itemEnd], " "), ",") {
+		if t := strings.TrimSpace(tok); t != "" {
+			items = append(items, t)
+		}
+	}
+	if len(items) == 0 {
+		return nil, "", "", false
+	}
+	return items, object, principal, true
 }
 
 // cmdExport writes a query, table, or the current result to a file (§16):

@@ -138,16 +138,54 @@ func (a *Adapter) ListSchemas(ctx context.Context) ([]string, error) {
 }
 
 func (a *Adapter) ListTables(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "table",
-		`SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-		 WHERE TABLE_TYPE = 'BASE TABLE'
-		 ORDER BY TABLE_SCHEMA, TABLE_NAME`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindTable}, "")
 }
 
 func (a *Adapter) ListViews(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "view",
-		`SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS
-		 ORDER BY TABLE_SCHEMA, TABLE_NAME`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindView}, "")
+}
+
+// SearchObjects is the typed object finder (design §27). Each requested kind
+// runs its own catalog query filtered by a case-insensitive name substring;
+// results are concatenated in kind order. Routines come from
+// INFORMATION_SCHEMA.ROUTINES split by ROUTINE_TYPE.
+func (a *Adapter) SearchObjects(ctx context.Context, kinds []adapter.ObjectKind, substr string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	if len(kinds) == 0 {
+		kinds = adapter.AllObjectKinds()
+	}
+	var out []adapter.ObjectRef
+	for _, k := range kinds {
+		var sql string
+		switch k {
+		case adapter.KindTable:
+			sql = `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+			       WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME LIKE '%' + @p1 + '%'
+			       ORDER BY TABLE_SCHEMA, TABLE_NAME`
+		case adapter.KindView:
+			sql = `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS
+			       WHERE TABLE_NAME LIKE '%' + @p1 + '%'
+			       ORDER BY TABLE_SCHEMA, TABLE_NAME`
+		case adapter.KindProcedure, adapter.KindFunction:
+			rt := "PROCEDURE"
+			if k == adapter.KindFunction {
+				rt = "FUNCTION"
+			}
+			sql = `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES
+			       WHERE ROUTINE_TYPE = '` + rt + `' AND ROUTINE_NAME LIKE '%' + @p1 + '%'
+			       ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`
+		default:
+			continue
+		}
+		refs, err := a.queryObjects(ctx, string(k), sql, substr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
 }
 
 // DescribeObject returns columns for a table or view, marking primary-key
@@ -293,6 +331,398 @@ func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, e
 
 func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
 	return nil, adapter.ErrUnsupported
+}
+
+// Source returns the full definition text of a view, procedure, or function from
+// sys.sql_modules (which, unlike INFORMATION_SCHEMA, is not truncated at 4000
+// chars). Tables have no module definition — use DescribeObject.
+func (a *Adapter) Source(ctx context.Context, name string) (adapter.ObjectSource, error) {
+	if a.db == nil {
+		return adapter.ObjectSource{}, errNotConnected
+	}
+	schema, obj := splitName(name)
+	var sch, nm, typ, body string
+	err := a.db.QueryRowContext(ctx,
+		`SELECT s.name, o.name, o.type, m.definition
+		 FROM sys.sql_modules m
+		 JOIN sys.objects o ON o.object_id = m.object_id
+		 JOIN sys.schemas s ON s.schema_id = o.schema_id
+		 WHERE o.name = @p1 AND (@p2 = '' OR s.name = @p2)
+		 ORDER BY s.name`, obj, schema).Scan(&sch, &nm, &typ, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adapter.ObjectSource{}, fmt.Errorf("sqlserver: no view, procedure, or function named %q", name)
+	}
+	if err != nil {
+		return adapter.ObjectSource{}, err
+	}
+	kind := adapter.KindFunction
+	switch strings.TrimSpace(typ) {
+	case "V":
+		kind = adapter.KindView
+	case "P":
+		kind = adapter.KindProcedure
+	}
+	return adapter.ObjectSource{
+		Ref:      adapter.ObjectRef{Schema: sch, Name: nm, Type: string(kind)},
+		Language: "tsql",
+		Body:     body,
+	}, nil
+}
+
+// SearchRoutines finds procedures/functions whose name or body matches text.
+func (a *Adapter) SearchRoutines(ctx context.Context, text string) ([]adapter.ObjectRef, error) {
+	var out []adapter.ObjectRef
+	for _, rt := range []struct{ kind, filter string }{
+		{string(adapter.KindProcedure), "o.type = 'P'"},
+		{string(adapter.KindFunction), "o.type IN ('FN','IF','TF','FS','FT')"},
+	} {
+		refs, err := a.queryObjects(ctx, rt.kind,
+			`SELECT s.name, o.name FROM sys.sql_modules m
+			 JOIN sys.objects o ON o.object_id = m.object_id
+			 JOIN sys.schemas s ON s.schema_id = o.schema_id
+			 WHERE `+rt.filter+`
+			   AND (o.name LIKE '%' + @p1 + '%' OR m.definition LIKE '%' + @p1 + '%')
+			 ORDER BY s.name, o.name`, text)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
+}
+
+// SearchTableFunctions finds table-valued functions: inline (IF), multi-statement
+// (TF), and CLR (FT). Read as SELECT * FROM schema.f(...).
+func (a *Adapter) SearchTableFunctions(ctx context.Context, substr string) ([]adapter.ObjectRef, error) {
+	return a.queryObjects(ctx, string(adapter.KindTableFunction),
+		`SELECT s.name, o.name FROM sys.objects o
+		 JOIN sys.schemas s ON s.schema_id = o.schema_id
+		 WHERE o.type IN ('IF','TF','FT') AND o.name LIKE '%' + @p1 + '%'
+		 ORDER BY s.name, o.name`, substr)
+}
+
+// --- scheduling: SQL Server Agent jobs (msdb) ---
+
+// defaultJobHistoryLimit bounds JobHistory when the caller passes limit <= 0.
+const defaultJobHistoryLimit = 50
+
+// ListJobs lists SQL Server Agent jobs (msdb.dbo.sysjobs) whose name matches
+// substr. Schedule is left empty at the list level; DescribeJob fills it in.
+func (a *Adapter) ListJobs(ctx context.Context, substr string) ([]adapter.JobRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	rows, err := a.db.QueryContext(ctx,
+		`SELECT name, enabled FROM msdb.dbo.sysjobs
+		 WHERE name LIKE '%' + @p1 + '%'
+		 ORDER BY name`, substr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.JobRef
+	for rows.Next() {
+		var (
+			name    string
+			enabled int
+		)
+		if err := rows.Scan(&name, &enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, adapter.JobRef{Name: name, Enabled: enabled != 0})
+	}
+	return out, rows.Err()
+}
+
+// DescribeJob returns a job's owner, description, its schedule name(s) and next
+// run time, and its ordered steps.
+func (a *Adapter) DescribeJob(ctx context.Context, name string) (adapter.Job, error) {
+	if a.db == nil {
+		return adapter.Job{}, errNotConnected
+	}
+	var (
+		nm      string
+		enabled int
+		owner   sql.NullString
+		descr   string
+	)
+	err := a.db.QueryRowContext(ctx,
+		`SELECT j.name, j.enabled, SUSER_SNAME(j.owner_sid), ISNULL(j.description,'')
+		 FROM msdb.dbo.sysjobs j WHERE j.name = @p1`, name).Scan(&nm, &enabled, &owner, &descr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adapter.Job{}, fmt.Errorf("sqlserver: no agent job named %q", name)
+	}
+	if err != nil {
+		return adapter.Job{}, err
+	}
+	job := adapter.Job{
+		Ref:     adapter.JobRef{Name: nm, Enabled: enabled != 0},
+		Owner:   owner.String,
+		Comment: descr,
+	}
+
+	// Schedule name(s) and the earliest upcoming run.
+	schedRows, err := a.db.QueryContext(ctx,
+		`SELECT sch.name, js.next_run_date, js.next_run_time
+		 FROM msdb.dbo.sysjobschedules js
+		 JOIN msdb.dbo.sysschedules sch ON sch.schedule_id = js.schedule_id
+		 JOIN msdb.dbo.sysjobs j ON j.job_id = js.job_id
+		 WHERE j.name = @p1
+		 ORDER BY js.next_run_date, js.next_run_time`, name)
+	if err != nil {
+		return adapter.Job{}, err
+	}
+	defer schedRows.Close()
+	var schedNames []string
+	for schedRows.Next() {
+		var (
+			sname            string
+			nextDate, nextTm int
+		)
+		if err := schedRows.Scan(&sname, &nextDate, &nextTm); err != nil {
+			return adapter.Job{}, err
+		}
+		schedNames = append(schedNames, sname)
+		if job.NextRun == "" {
+			job.NextRun = fmtAgentDateTime(nextDate, nextTm)
+		}
+	}
+	if err := schedRows.Err(); err != nil {
+		return adapter.Job{}, err
+	}
+	job.Ref.Schedule = strings.Join(schedNames, ", ")
+
+	// Ordered steps.
+	stepRows, err := a.db.QueryContext(ctx,
+		`SELECT s.step_name, s.command
+		 FROM msdb.dbo.sysjobsteps s
+		 JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id
+		 WHERE j.name = @p1 ORDER BY s.step_id`, name)
+	if err != nil {
+		return adapter.Job{}, err
+	}
+	defer stepRows.Close()
+	for stepRows.Next() {
+		var st adapter.JobStep
+		if err := stepRows.Scan(&st.Name, &st.Command); err != nil {
+			return adapter.Job{}, err
+		}
+		job.Steps = append(job.Steps, st)
+	}
+	return job, stepRows.Err()
+}
+
+// JobHistory returns the job-outcome rows (step_id = 0) from sysjobhistory,
+// newest first. SQL Server stores date/time/duration as packed integers, which
+// fmtAgentDateTime / fmtAgentDuration render as text.
+func (a *Adapter) JobHistory(ctx context.Context, name string, limit int) ([]adapter.JobRun, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	if limit <= 0 {
+		limit = defaultJobHistoryLimit
+	}
+	rows, err := a.db.QueryContext(ctx,
+		`SELECT TOP (@p2) h.run_date, h.run_time, h.run_duration, h.run_status, h.message
+		 FROM msdb.dbo.sysjobhistory h
+		 JOIN msdb.dbo.sysjobs j ON j.job_id = h.job_id
+		 WHERE j.name = @p1 AND h.step_id = 0
+		 ORDER BY h.instance_id DESC`, name, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.JobRun
+	for rows.Next() {
+		var (
+			runDate, runTime, runDur, status int
+			message                          sql.NullString
+		)
+		if err := rows.Scan(&runDate, &runTime, &runDur, &status, &message); err != nil {
+			return nil, err
+		}
+		msg := message.String
+		if d := fmtAgentDuration(runDur); d != "" {
+			if msg != "" {
+				msg += " "
+			}
+			msg += "(duration " + d + ")"
+		}
+		out = append(out, adapter.JobRun{
+			Start:   fmtAgentDateTime(runDate, runTime),
+			Status:  agentRunStatus(status),
+			Message: msg,
+		})
+	}
+	return out, rows.Err()
+}
+
+// agentRunStatus maps sysjobhistory.run_status to a word.
+func agentRunStatus(s int) string {
+	switch s {
+	case 0:
+		return "failed"
+	case 1:
+		return "succeeded"
+	case 2:
+		return "retry"
+	case 3:
+		return "canceled"
+	case 4:
+		return "running"
+	default:
+		return fmt.Sprintf("status %d", s)
+	}
+}
+
+// fmtAgentDateTime renders SQL Server Agent's packed integer date (yyyymmdd) and
+// time (hhmmss) as "YYYY-MM-DD HH:MM:SS". A zero date (no run / not scheduled)
+// yields "".
+func fmtAgentDateTime(date, tm int) string {
+	if date == 0 {
+		return ""
+	}
+	y, m, d := date/10000, (date/100)%100, date%100
+	hh, mm, ss := tm/10000, (tm/100)%100, tm%100
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hh, mm, ss)
+}
+
+// fmtAgentDuration renders sysjobhistory.run_duration (packed HHMMSS) as
+// "H:MM:SS". Zero yields "".
+func fmtAgentDuration(dur int) string {
+	if dur == 0 {
+		return ""
+	}
+	hh, mm, ss := dur/10000, (dur/100)%100, dur%100
+	return fmt.Sprintf("%d:%02d:%02d", hh, mm, ss)
+}
+
+// --- security: database principals (sys.database_principals) ---
+
+// ListPrincipals lists database users (types S/U/G) and roles (type R). kind
+// filters that split; substr filters by name.
+func (a *Adapter) ListPrincipals(ctx context.Context, kind, substr string) ([]adapter.PrincipalRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	cond := "type IN ('S','U','G','R')"
+	switch kind {
+	case adapter.PrincipalKindUser:
+		cond = "type IN ('S','U','G')"
+	case adapter.PrincipalKindRole:
+		cond = "type = 'R'"
+	}
+	rows, err := a.db.QueryContext(ctx,
+		`SELECT name, type FROM sys.database_principals
+		 WHERE `+cond+` AND (@p1 = '' OR name LIKE '%' + @p1 + '%')
+		 ORDER BY name`, substr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.PrincipalRef
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return nil, err
+		}
+		out = append(out, adapter.PrincipalRef{Name: name, Kind: principalKind(typ), Enabled: true})
+	}
+	return out, rows.Err()
+}
+
+// DescribePrincipal returns a principal's type, default schema, role membership,
+// members (for a role), and granted permissions.
+func (a *Adapter) DescribePrincipal(ctx context.Context, name string) (adapter.Principal, error) {
+	if a.db == nil {
+		return adapter.Principal{}, errNotConnected
+	}
+	var nm, typ string
+	var defSchema sql.NullString
+	err := a.db.QueryRowContext(ctx,
+		`SELECT name, type, default_schema_name FROM sys.database_principals WHERE name = @p1`, name).
+		Scan(&nm, &typ, &defSchema)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adapter.Principal{}, fmt.Errorf("sqlserver: no principal named %q", name)
+	}
+	if err != nil {
+		return adapter.Principal{}, err
+	}
+	p := adapter.Principal{Ref: adapter.PrincipalRef{Name: nm, Kind: principalKind(typ), Enabled: true}}
+	p.Attributes = append(p.Attributes, "type="+principalTypeLabel(typ))
+	if defSchema.String != "" {
+		p.Attributes = append(p.Attributes, "default_schema="+defSchema.String)
+	}
+
+	if p.MemberOf, err = a.queryStrings(ctx,
+		`SELECT r.name FROM sys.database_role_members m
+		 JOIN sys.database_principals r ON r.principal_id = m.role_principal_id
+		 JOIN sys.database_principals u ON u.principal_id = m.member_principal_id
+		 WHERE u.name = @p1 ORDER BY r.name`, name); err != nil {
+		return adapter.Principal{}, err
+	}
+	if p.Members, err = a.queryStrings(ctx,
+		`SELECT u.name FROM sys.database_role_members m
+		 JOIN sys.database_principals r ON r.principal_id = m.role_principal_id
+		 JOIN sys.database_principals u ON u.principal_id = m.member_principal_id
+		 WHERE r.name = @p1 ORDER BY u.name`, name); err != nil {
+		return adapter.Principal{}, err
+	}
+
+	grantRows, err := a.db.QueryContext(ctx,
+		`SELECT p.permission_name,
+		        CASE WHEN p.class = 1 THEN ISNULL(SCHEMA_NAME(o.schema_id) + '.' + o.name, '')
+		             ELSE '' END
+		 FROM sys.database_permissions p
+		 JOIN sys.database_principals dp ON dp.principal_id = p.grantee_principal_id
+		 LEFT JOIN sys.objects o ON o.object_id = p.major_id AND p.class = 1
+		 WHERE dp.name = @p1 AND p.state IN ('G','W')
+		 ORDER BY p.permission_name`, name)
+	if err != nil {
+		return adapter.Principal{}, err
+	}
+	defer grantRows.Close()
+	for grantRows.Next() {
+		var g adapter.Grant
+		if err := grantRows.Scan(&g.Privilege, &g.On); err != nil {
+			return adapter.Principal{}, err
+		}
+		p.Grants = append(p.Grants, g)
+	}
+	return p, grantRows.Err()
+}
+
+// principalKind maps a sys.database_principals type code to a principal kind.
+func principalKind(typ string) string {
+	if strings.TrimSpace(typ) == "R" {
+		return adapter.PrincipalKindRole
+	}
+	return adapter.PrincipalKindUser
+}
+
+// principalTypeLabel gives a human label for a principal type code.
+func principalTypeLabel(typ string) string {
+	switch strings.TrimSpace(typ) {
+	case "S":
+		return "SQL_USER"
+	case "U":
+		return "WINDOWS_USER"
+	case "G":
+		return "WINDOWS_GROUP"
+	case "R":
+		return "DATABASE_ROLE"
+	default:
+		return typ
+	}
+}
+
+// Capabilities: SQL Server exposes plans through SET SHOWPLAN session modes
+// rather than an EXPLAIN statement, so ExplainQuery stays unsupported. It
+// supports source retrieval (sys.sql_modules), table functions, SQL Server Agent
+// job introspection (msdb), and principal/security introspection
+// (sys.database_principals). Other features arrive later.
+func (a *Adapter) Capabilities() adapter.CapabilitySet {
+	return adapter.Caps(adapter.CapSource, adapter.CapTableFunctions, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectTSQL }

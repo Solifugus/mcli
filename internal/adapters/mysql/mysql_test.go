@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -67,5 +68,54 @@ func TestBuildConfigDSNPassthrough(t *testing.T) {
 	}
 	if cfg.Addr != "db:3307" || cfg.DBName != "app" {
 		t.Errorf("parsed DSN = %+v", cfg)
+	}
+}
+
+func TestCapabilities(t *testing.T) {
+	caps := (&Adapter{}).Capabilities()
+	if !caps.Has(adapter.CapSource) {
+		t.Error("MySQL should advertise CapSource")
+	}
+	if caps.Has(adapter.CapTableFunctions) {
+		t.Error("MySQL has no table-valued functions; CapTableFunctions must not be advertised")
+	}
+	if !caps.Has(adapter.CapJobs) {
+		t.Error("MySQL should advertise CapJobs (events)")
+	}
+	if !caps.Has(adapter.CapSecurity) {
+		t.Error("MySQL should advertise CapSecurity")
+	}
+	if !caps.Has(adapter.CapSecurityEdit) {
+		t.Error("MySQL should advertise CapSecurityEdit")
+	}
+}
+
+func TestSplitAccount(t *testing.T) {
+	cases := []struct{ in, user, host string }{
+		{"bob@localhost", "bob", "localhost"},
+		{"bob", "bob", "%"},
+		{"app@%", "app", "%"},
+		{"a@b@c", "a@b", "c"}, // split on the last '@'
+	}
+	for _, c := range cases {
+		u, h := splitAccount(c.in)
+		if u != c.user || h != c.host {
+			t.Errorf("splitAccount(%q) = (%q,%q), want (%q,%q)", c.in, u, h, c.user, c.host)
+		}
+	}
+}
+
+func TestEscapeMySQLLiteral(t *testing.T) {
+	if got := escapeMySQLLiteral("o'brien"); got != "o''brien" {
+		t.Errorf("escapeMySQLLiteral = %q", got)
+	}
+}
+
+// TestJobHistoryEmpty confirms MySQL's no-history contract: an empty slice, not
+// an error, even though the adapter is not connected here it must still short to
+// errNotConnected. Connected behavior (empty, nil) is covered by live tests.
+func TestJobHistoryNotConnected(t *testing.T) {
+	if _, err := (&Adapter{}).JobHistory(context.Background(), "e", 0); err == nil {
+		t.Error("JobHistory without a connection should error")
 	}
 }

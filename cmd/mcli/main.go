@@ -39,6 +39,8 @@ func run(args []string) error {
 			return runMCP()
 		}
 		return fmt.Errorf("unknown mcp subcommand %q; try: mcli mcp serve", joinRest(args[1:]))
+	case "gui":
+		return runGUI()
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -66,6 +68,7 @@ func printUsage() {
 
 Usage:
   mcli                 launch the interactive TUI (default)
+  mcli gui             launch the native GUI (only in a -tags gui build)
   mcli mcp serve       run the headless stdio MCP server
   mcli help            show this help
   mcli version         print the version

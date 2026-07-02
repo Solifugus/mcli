@@ -5,9 +5,9 @@ import "strings"
 // replCommands are the commands offered by Tab completion. Aliases (.q, .exit)
 // still work but are intentionally not suggested.
 var replCommands = []string{
-	`.ai`, `.cat`, `.clear`, `.connect`, `.copy`, `.delete`, `.describe`, `.disconnect`,
+	`.ai`, `.assist`, `.caps`, `.cat`, `.clear`, `.connect`, `.copy`, `.delete`, `.describe`, `.disconnect`,
 	`.edit`, `.enter`, `.export`, `.files`, `.grid`, `.help`, `.import`,
-	`.lint`, `.list`, `.mcp`, `.readonly`, `.run`, `.quit`, `.rename`, `.server`, `.workspace`, "use",
+	`.createuser`, `.dropuser`, `.find`, `.grant`, `.grep`, `.job`, `.jobs`, `.lint`, `.list`, `.mcp`, `.objects`, `.readonly`, `.revoke`, `.role`, `.roles`, `.run`, `.quit`, `.rename`, `.server`, `.source`, `.tablefuncs`, `.tvf`, `.user`, `.users`, `.workspace`, "use",
 }
 
 // aiSubcommands are the second-token completions for .ai.
@@ -24,6 +24,10 @@ var serverSubcommands = []string{"add", "clear-password", "edit", "list", "remov
 
 // listTargets are the second-token completions for .list.
 var listTargets = []string{"databases", "schemas", "tables", "views"}
+
+// objectKindTargets are the kind-filter tokens for .objects / .find. They may
+// be combined in any order, so they are offered at every argument position.
+var objectKindTargets = []string{"tables", "views", "procedures", "functions"}
 
 // complete returns the line with the token under the (end-of-line) cursor
 // expanded, plus any candidate list to display when the completion is ambiguous.
@@ -113,9 +117,17 @@ func (m *Model) argCandidates(cmd string, tokenIndex int, subcommand string) []s
 		if tokenIndex == 1 {
 			return listTargets
 		}
+	case `.objects`, `.find`:
+		if tokenIndex >= 1 {
+			return objectKindTargets
+		}
 	case `.mcp`:
 		if tokenIndex == 1 {
 			return mcpSubcommands
+		}
+	case `.assist`:
+		if tokenIndex == 1 {
+			return []string{"on", "off", "status"}
 		}
 	case `.edit`, `.run`, `.cat`, `.delete`:
 		if tokenIndex == 1 {

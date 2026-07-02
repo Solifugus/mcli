@@ -15,6 +15,8 @@ import (
 
 	"github.com/Solifugus/mcli/internal/core"
 	"github.com/Solifugus/mcli/internal/core/adapter"
+	"github.com/Solifugus/mcli/internal/core/assist"
+	"github.com/Solifugus/mcli/internal/mcp"
 )
 
 type mode int
@@ -93,6 +95,14 @@ type Model struct {
 	history []string
 	histIdx int
 	draft   string
+
+	// Live assist session (design §26). When on, assistSrv is the running
+	// loopback HTTP endpoint an external AI attaches to, and the model drains
+	// assistCh (a subscription to the core's guidance bus) to render prefills,
+	// highlights, and walkthroughs. All nil/off by default — opt-in via .assist.
+	assistSrv   *mcp.HTTPServer
+	assistCh    <-chan assist.Event
+	assistUnsub func()
 }
 
 // New builds the root model around an opened core.
@@ -176,6 +186,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor.insertString(msg.Content)
 			return m, nil
 		}
+		return m, nil
+	case assistMsg:
+		return m.handleAssist(msg)
+	case assistClosedMsg:
+		// The subscription channel closed (session stopped); stop listening.
 		return m, nil
 	case asyncResultMsg:
 		return m.handleAsyncResult(msg)
@@ -379,6 +394,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		m.stopAssist() // tear down any live endpoint and remove session.json
 		m.quitting = true
 		return m, tea.Quit
 	}
@@ -465,6 +481,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tea.Println(strings.Join(res.lines, "\n")))
 	}
 	if res.quit {
+		m.stopAssist() // tear down any live endpoint and remove session.json
 		m.quitting = true
 		cmds = append(cmds, tea.Quit)
 		return m, tea.Sequence(cmds...)

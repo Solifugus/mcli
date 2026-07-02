@@ -34,11 +34,35 @@ type ConnectParams struct {
 	Params           map[string]string
 }
 
+// ObjectKind classifies a database object for typed search. It is the value
+// stored in ObjectRef.Type, promoted to a named type so the object finder
+// (SearchObjects) can take a checked set of kinds rather than free strings.
+type ObjectKind string
+
+const (
+	KindTable     ObjectKind = "table"
+	KindView      ObjectKind = "view"
+	KindProcedure ObjectKind = "procedure"
+	KindFunction  ObjectKind = "function"
+	// KindTableFunction labels a function that returns a rowset (table-valued),
+	// so it can be read as a tabular data source. It is intentionally NOT part of
+	// AllObjectKinds — the name/kind object finder treats all functions as
+	// KindFunction; table functions are discovered separately via
+	// AdapterTableFunctions so the existing finder is unaffected. See source.go's
+	// sibling tablefunc.go and design §29 (Data area).
+	KindTableFunction ObjectKind = "table_function"
+)
+
+// AllObjectKinds is the set SearchObjects searches when no kinds are requested.
+func AllObjectKinds() []ObjectKind {
+	return []ObjectKind{KindTable, KindView, KindProcedure, KindFunction}
+}
+
 // ObjectRef names a schema-qualified database object.
 type ObjectRef struct {
 	Schema string
 	Name   string
-	Type   string // "table", "view", ...
+	Type   string // an ObjectKind value: "table", "view", "procedure", "function"
 }
 
 // Column describes one column of a table or view.
@@ -102,6 +126,11 @@ type Adapter interface {
 	ListSchemas(ctx context.Context) ([]string, error)
 	ListTables(ctx context.Context) ([]ObjectRef, error)
 	ListViews(ctx context.Context) ([]ObjectRef, error)
+	// SearchObjects returns objects whose kind is in kinds (empty = all kinds,
+	// per AllObjectKinds) and whose name contains substr (case-insensitive;
+	// empty = all names). It is the typed object finder shared by every
+	// front-end; ListTables/ListViews are thin wrappers over it.
+	SearchObjects(ctx context.Context, kinds []ObjectKind, substr string) ([]ObjectRef, error)
 	DescribeObject(ctx context.Context, name string) (ObjectDetail, error)
 
 	RunQuery(ctx context.Context, sql string) (RowStream, error)
@@ -113,6 +142,11 @@ type Adapter interface {
 
 	GetPreLineage(ctx context.Context, name string) ([]ObjectRef, error)
 	GetPostLineage(ctx context.Context, name string) ([]ObjectRef, error)
+
+	// Capabilities advertises the optional features this adapter supports, so a
+	// front-end can offer or grey-out a feature up front instead of probing it
+	// with a call that returns ErrUnsupported. See CapabilitySet.
+	Capabilities() CapabilitySet
 
 	Dialect() Dialect
 }

@@ -131,18 +131,59 @@ func (a *Adapter) ListSchemas(ctx context.Context) ([]string, error) {
 }
 
 func (a *Adapter) ListTables(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "table",
-		`SELECT table_schema, table_name FROM information_schema.tables
-		 WHERE table_type = 'BASE TABLE'
-		   AND table_schema NOT IN ('pg_catalog','information_schema')
-		 ORDER BY table_schema, table_name`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindTable}, "")
 }
 
 func (a *Adapter) ListViews(ctx context.Context) ([]adapter.ObjectRef, error) {
-	return a.queryObjects(ctx, "view",
-		`SELECT table_schema, table_name FROM information_schema.views
-		 WHERE table_schema NOT IN ('pg_catalog','information_schema')
-		 ORDER BY table_schema, table_name`)
+	return a.SearchObjects(ctx, []adapter.ObjectKind{adapter.KindView}, "")
+}
+
+// SearchObjects is the typed object finder. Each requested kind runs its own
+// catalog query filtered by a case-insensitive name substring ('%'||”||'%'
+// matches all when substr is empty), and the results are concatenated in kind
+// order. Routines come from information_schema.routines split by routine_type.
+func (a *Adapter) SearchObjects(ctx context.Context, kinds []adapter.ObjectKind, substr string) ([]adapter.ObjectRef, error) {
+	if a.conn == nil {
+		return nil, errNotConnected
+	}
+	if len(kinds) == 0 {
+		kinds = adapter.AllObjectKinds()
+	}
+	var out []adapter.ObjectRef
+	for _, k := range kinds {
+		var sql string
+		switch k {
+		case adapter.KindTable:
+			sql = `SELECT table_schema, table_name FROM information_schema.tables
+			       WHERE table_type = 'BASE TABLE'
+			         AND table_schema NOT IN ('pg_catalog','information_schema')
+			         AND table_name ILIKE '%' || $1 || '%'
+			       ORDER BY table_schema, table_name`
+		case adapter.KindView:
+			sql = `SELECT table_schema, table_name FROM information_schema.views
+			       WHERE table_schema NOT IN ('pg_catalog','information_schema')
+			         AND table_name ILIKE '%' || $1 || '%'
+			       ORDER BY table_schema, table_name`
+		case adapter.KindProcedure, adapter.KindFunction:
+			rt := "PROCEDURE"
+			if k == adapter.KindFunction {
+				rt = "FUNCTION"
+			}
+			sql = `SELECT routine_schema, routine_name FROM information_schema.routines
+			       WHERE routine_type = '` + rt + `'
+			         AND routine_schema NOT IN ('pg_catalog','information_schema')
+			         AND routine_name ILIKE '%' || $1 || '%'
+			       ORDER BY routine_schema, routine_name`
+		default:
+			continue // unknown kind contributes nothing
+		}
+		refs, err := a.queryObjects(ctx, string(k), sql, substr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
 }
 
 // DescribeObject returns columns for a table or view, marking primary-key
@@ -291,6 +332,208 @@ func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, 
 	return nil, adapter.ErrUnsupported
 }
 
+// Source returns the definition text of a view (from pg_views) or a
+// procedure/function (rendered by pg_get_functiondef). Tables have no stored
+// definition and yield ErrUnsupported via a not-found path — use DescribeObject.
+func (a *Adapter) Source(ctx context.Context, name string) (adapter.ObjectSource, error) {
+	if a.conn == nil {
+		return adapter.ObjectSource{}, errNotConnected
+	}
+	schema, obj := splitName(name)
+
+	var vs, vn, vdef string
+	err := a.conn.QueryRow(ctx,
+		`SELECT schemaname, viewname, definition FROM pg_views
+		 WHERE viewname = $1 AND ($2 = '' OR schemaname = $2)
+		   AND schemaname NOT IN ('pg_catalog','information_schema')
+		 ORDER BY schemaname LIMIT 1`, obj, schema).Scan(&vs, &vn, &vdef)
+	if err == nil {
+		return adapter.ObjectSource{
+			Ref:      adapter.ObjectRef{Schema: vs, Name: vn, Type: string(adapter.KindView)},
+			Language: "sql",
+			Body:     fmt.Sprintf("CREATE OR REPLACE VIEW %s.%s AS\n%s", vs, vn, vdef),
+		}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return adapter.ObjectSource{}, err
+	}
+
+	var rs, rn, lang, body string
+	var isProc bool
+	err = a.conn.QueryRow(ctx,
+		`SELECT n.nspname, p.proname, COALESCE(l.lanname,''), pg_get_functiondef(p.oid),
+		        p.prokind = 'p'
+		 FROM pg_proc p
+		 JOIN pg_namespace n ON n.oid = p.pronamespace
+		 LEFT JOIN pg_language l ON l.oid = p.prolang
+		 WHERE p.proname = $1 AND ($2 = '' OR n.nspname = $2)
+		   AND n.nspname NOT IN ('pg_catalog','information_schema')
+		 ORDER BY n.nspname LIMIT 1`, obj, schema).Scan(&rs, &rn, &lang, &body, &isProc)
+	if err == nil {
+		kind := adapter.KindFunction
+		if isProc {
+			kind = adapter.KindProcedure
+		}
+		return adapter.ObjectSource{
+			Ref:      adapter.ObjectRef{Schema: rs, Name: rn, Type: string(kind)},
+			Language: lang,
+			Body:     body,
+		}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return adapter.ObjectSource{}, err
+	}
+	return adapter.ObjectSource{}, fmt.Errorf("postgres: no view, procedure, or function named %q", name)
+}
+
+// SearchRoutines finds procedures/functions whose name or body matches text
+// (information_schema.routines.routine_definition holds the body for SQL/plpgsql).
+func (a *Adapter) SearchRoutines(ctx context.Context, text string) ([]adapter.ObjectRef, error) {
+	var out []adapter.ObjectRef
+	for _, rt := range []struct{ kind, typ string }{
+		{string(adapter.KindProcedure), "PROCEDURE"},
+		{string(adapter.KindFunction), "FUNCTION"},
+	} {
+		refs, err := a.queryObjects(ctx, rt.kind,
+			`SELECT routine_schema, routine_name FROM information_schema.routines
+			 WHERE routine_type = '`+rt.typ+`'
+			   AND routine_schema NOT IN ('pg_catalog','information_schema')
+			   AND (routine_name ILIKE '%' || $1 || '%' OR routine_definition ILIKE '%' || $1 || '%')
+			 ORDER BY routine_schema, routine_name`, text)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
+	}
+	return out, nil
+}
+
+// SearchTableFunctions finds set-returning functions (proretset = true), which
+// can be read as SELECT * FROM f(...).
+func (a *Adapter) SearchTableFunctions(ctx context.Context, substr string) ([]adapter.ObjectRef, error) {
+	return a.queryObjects(ctx, string(adapter.KindTableFunction),
+		`SELECT n.nspname, p.proname FROM pg_proc p
+		 JOIN pg_namespace n ON n.oid = p.pronamespace
+		 WHERE p.proretset = true AND p.prokind = 'f'
+		   AND n.nspname NOT IN ('pg_catalog','information_schema')
+		   AND p.proname ILIKE '%' || $1 || '%'
+		 ORDER BY n.nspname, p.proname`, substr)
+}
+
+// --- security: roles (pg_roles / pg_auth_members) ---
+
+// ListPrincipals lists roles from pg_roles. In Postgres a "user" is a role that
+// can log in (rolcanlogin) and a "role" is one that cannot; the built-in pg_*
+// roles are excluded. kind filters that split; substr filters by name.
+func (a *Adapter) ListPrincipals(ctx context.Context, kind, substr string) ([]adapter.PrincipalRef, error) {
+	if a.conn == nil {
+		return nil, errNotConnected
+	}
+	cond := ""
+	switch kind {
+	case adapter.PrincipalKindUser:
+		cond = " AND rolcanlogin"
+	case adapter.PrincipalKindRole:
+		cond = " AND NOT rolcanlogin"
+	}
+	rows, err := a.conn.Query(ctx,
+		`SELECT rolname, rolcanlogin FROM pg_roles
+		 WHERE rolname NOT LIKE 'pg\_%' AND ($1 = '' OR rolname ILIKE '%' || $1 || '%')`+cond+`
+		 ORDER BY rolname`, substr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.PrincipalRef
+	for rows.Next() {
+		var name string
+		var canLogin bool
+		if err := rows.Scan(&name, &canLogin); err != nil {
+			return nil, err
+		}
+		out = append(out, adapter.PrincipalRef{Name: name, Kind: roleKind(canLogin), Enabled: canLogin})
+	}
+	return out, rows.Err()
+}
+
+// DescribePrincipal returns a role's attributes, the roles it is a member of, the
+// roles that are members of it, and its explicit table privileges.
+func (a *Adapter) DescribePrincipal(ctx context.Context, name string) (adapter.Principal, error) {
+	if a.conn == nil {
+		return adapter.Principal{}, errNotConnected
+	}
+	var rolname string
+	var super, createdb, createrole, canLogin, replication, bypassrls bool
+	err := a.conn.QueryRow(ctx,
+		`SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolcanlogin, rolreplication, rolbypassrls
+		 FROM pg_roles WHERE rolname = $1`, name).
+		Scan(&rolname, &super, &createdb, &createrole, &canLogin, &replication, &bypassrls)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return adapter.Principal{}, fmt.Errorf("postgres: no role named %q", name)
+	}
+	if err != nil {
+		return adapter.Principal{}, err
+	}
+	p := adapter.Principal{Ref: adapter.PrincipalRef{Name: rolname, Kind: roleKind(canLogin), Enabled: canLogin}}
+	for _, at := range []struct {
+		on    bool
+		label string
+	}{
+		{super, "SUPERUSER"}, {createdb, "CREATEDB"}, {createrole, "CREATEROLE"},
+		{canLogin, "LOGIN"}, {replication, "REPLICATION"}, {bypassrls, "BYPASSRLS"},
+	} {
+		if at.on {
+			p.Attributes = append(p.Attributes, at.label)
+		}
+	}
+
+	if p.MemberOf, err = a.queryStrings(ctx,
+		`SELECT g.rolname FROM pg_auth_members m
+		 JOIN pg_roles r ON r.oid = m.member
+		 JOIN pg_roles g ON g.oid = m.roleid
+		 WHERE r.rolname = $1 ORDER BY g.rolname`, name); err != nil {
+		return adapter.Principal{}, err
+	}
+	if p.Members, err = a.queryStrings(ctx,
+		`SELECT r.rolname FROM pg_auth_members m
+		 JOIN pg_roles r ON r.oid = m.member
+		 JOIN pg_roles g ON g.oid = m.roleid
+		 WHERE g.rolname = $1 ORDER BY r.rolname`, name); err != nil {
+		return adapter.Principal{}, err
+	}
+
+	grantRows, err := a.conn.Query(ctx,
+		`SELECT privilege_type, table_schema || '.' || table_name
+		 FROM information_schema.role_table_grants
+		 WHERE grantee = $1
+		 ORDER BY table_schema, table_name, privilege_type`, name)
+	if err != nil {
+		return adapter.Principal{}, err
+	}
+	defer grantRows.Close()
+	for grantRows.Next() {
+		var g adapter.Grant
+		if err := grantRows.Scan(&g.Privilege, &g.On); err != nil {
+			return adapter.Principal{}, err
+		}
+		p.Grants = append(p.Grants, g)
+	}
+	return p, grantRows.Err()
+}
+
+// roleKind maps a Postgres role's login capability to a principal kind.
+func roleKind(canLogin bool) string {
+	if canLogin {
+		return adapter.PrincipalKindUser
+	}
+	return adapter.PrincipalKindRole
+}
+
+// Capabilities: Postgres supports EXPLAIN, source retrieval, table functions, and
+// role/security introspection (pg_roles). Lineage and job scheduling are not yet
+// implemented (Postgres has no native scheduler).
+func (a *Adapter) Capabilities() adapter.CapabilitySet {
+	return adapter.Caps(adapter.CapExplain, adapter.CapSource, adapter.CapTableFunctions, adapter.CapSecurity, adapter.CapSecurityEdit)
+}
+
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectPostgres }
 
 // --- helpers ---
@@ -348,8 +591,8 @@ type rowStream struct {
 	cols []string
 }
 
-func (r *rowStream) Columns() []string        { return r.cols }
-func (r *rowStream) Next() bool               { return r.rows.Next() }
-func (r *rowStream) Values() ([]any, error)   { return r.rows.Values() }
-func (r *rowStream) Err() error               { return r.rows.Err() }
-func (r *rowStream) Close() error             { r.rows.Close(); return r.rows.Err() }
+func (r *rowStream) Columns() []string      { return r.cols }
+func (r *rowStream) Next() bool             { return r.rows.Next() }
+func (r *rowStream) Values() ([]any, error) { return r.rows.Values() }
+func (r *rowStream) Err() error             { return r.rows.Err() }
+func (r *rowStream) Close() error           { r.rows.Close(); return r.rows.Err() }

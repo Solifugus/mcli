@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/config"
 )
 
@@ -78,6 +79,41 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `.describe`:
 		res, run := m.cmdDescribe(args)
 		return res, async(run)
+	case `.objects`, `.find`:
+		res, run := m.cmdObjects(args)
+		return res, async(run)
+	case `.source`:
+		res, run := m.cmdSource(args)
+		return res, async(run)
+	case `.grep`:
+		res, run := m.cmdGrep(args)
+		return res, async(run)
+	case `.tablefuncs`, `.tvf`:
+		res, run := m.cmdTableFuncs(args)
+		return res, async(run)
+	case `.jobs`:
+		res, run := m.cmdJobs(args)
+		return res, async(run)
+	case `.job`:
+		res, run := m.cmdJob(args)
+		return res, async(run)
+	case `.users`:
+		res, run := m.cmdPrincipals(args, adapter.PrincipalKindUser)
+		return res, async(run)
+	case `.roles`:
+		res, run := m.cmdPrincipals(args, adapter.PrincipalKindRole)
+		return res, async(run)
+	case `.user`, `.role`:
+		res, run := m.cmdPrincipal(args)
+		return res, async(run)
+	case `.grant`:
+		return m.cmdGrant(args, false)
+	case `.revoke`:
+		return m.cmdGrant(args, true)
+	case `.createuser`:
+		return m.cmdCreateUser(args)
+	case `.dropuser`:
+		return m.cmdDropUser(args)
 	case "use":
 		res, run := m.cmdUse(args)
 		return res, async(run)
@@ -100,12 +136,16 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `.mcp`:
 		res, c := m.cmdMCP(args)
 		return res, runCmd(c)
+	case `.assist`:
+		return m.cmdAssist(args)
 	case `.run`:
 		return m.cmdRun(args)
 	case `.lint`:
 		return m.cmdLint(args)
 	case `.readonly`:
 		return m.cmdReadonly(args), sync()
+	case `.caps`:
+		return m.cmdCaps(), sync()
 	case `.ai`:
 		return m.cmdAI(args)
 	case `.grid`:
@@ -160,6 +200,39 @@ func (m *Model) cmdReadonly(args []string) cmdResult {
 	default:
 		return out(`usage: .readonly [on|off]`)
 	}
+}
+
+// capRows is the display order and labels for .caps: the full optional-feature
+// surface, so the user sees both what this engine supports and what it doesn't.
+var capRows = []struct {
+	cap   adapter.Capability
+	label string
+}{
+	{adapter.CapExplain, "explain — execution plans (.explain)"},
+	{adapter.CapLineage, "lineage — object dependency graph"},
+	{adapter.CapSource, "source — CREATE / definition text"},
+	{adapter.CapTableFunctions, "table_functions — table-valued functions as data"},
+	{adapter.CapJobs, "jobs — scheduler / agent introspection"},
+	{adapter.CapSecurity, "security — users, roles, grants"},
+	{adapter.CapSecurityEdit, "security_edit — generate GRANT/REVOKE/CREATE USER"},
+}
+
+// cmdCaps reports the optional features the connected engine supports. Both
+// front-ends read the same core.Capabilities(); this is the CLI face of it.
+func (m *Model) cmdCaps() cmdResult {
+	if !m.core.Connected() {
+		return out("not connected — capabilities depend on the connected server (use .connect)")
+	}
+	caps := m.core.Capabilities()
+	lines := []string{"capabilities of " + m.core.ConnServer() + ":"}
+	for _, r := range capRows {
+		mark := "  ✗ "
+		if caps.Has(r.cap) {
+			mark = "  ✓ "
+		}
+		lines = append(lines, mark+r.label)
+	}
+	return cmdResult{lines: lines}
 }
 
 func onOff(b bool) string {
@@ -574,7 +647,25 @@ var helpSections = []helpSection{
 	{"Databases & objects", []helpEntry{
 		{"use", "<database>", "switch current database"},
 		{".list", "databases|schemas|tables|views", "list objects"},
+		{".objects", "[tables] [views] [procedures] [functions] [<substr>]", "find objects by type + name (alias .find)"},
 		{".describe", "<table>", "show columns"},
+		{".source", "<view|procedure|function>", "show an object's definition text"},
+		{".grep", "<text>", "search procedure/function names and bodies"},
+		{".tablefuncs", "[<substr>]", "list table-valued functions + query template (alias .tvf)"},
+		{".caps", "", "show what the connected engine supports"},
+	}},
+	{"Scheduling", []helpEntry{
+		{".jobs", "[<substr>]", "list scheduler / agent jobs"},
+		{".job", "<name> [--history [N]]", "show a job's design, or its recent run history"},
+	}},
+	{"Security", []helpEntry{
+		{".users", "[<substr>]", "list database users"},
+		{".roles", "[<substr>]", "list database roles"},
+		{".user", "<name>", "show a principal's config (also .role)"},
+		{".grant", "<privs|role> [ON <obj>] TO <who>", "grant privileges or a role (guarded)"},
+		{".revoke", "<privs|role> [ON <obj>] FROM <who>", "revoke privileges or a role (guarded)"},
+		{".createuser", "<name> <password>", "create a user/login (guarded)"},
+		{".dropuser", "<name>", "drop a user/login/role (guarded, dangerous)"},
 	}},
 	{"Running SQL", []helpEntry{
 		{"<sql>", "", "run SQL on the connection"},
@@ -597,6 +688,7 @@ var helpSections = []helpSection{
 	}},
 	{"AI assistant", []helpEntry{
 		{".ai", "ask <q>|explain <f|current>|fix <f|current>|providers|help", "ask the AI assistant"},
+		{".assist", "on|off|status", "let an external AI attach and guide you live (§26)"},
 	}},
 	{"System", []helpEntry{
 		{".mcp", "serve", "run the MCP server on this terminal's stdio"},

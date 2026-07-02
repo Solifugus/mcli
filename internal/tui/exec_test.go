@@ -3,7 +3,52 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/Solifugus/mcli/internal/core/adapter"
 )
+
+func TestParseObjectArgs(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      []string
+		wantKinds []adapter.ObjectKind
+		wantSub   string
+		wantErr   bool
+	}{
+		{"empty", nil, nil, "", false},
+		{"substring only", []string{"order"}, nil, "order", false},
+		{"single kind", []string{"tables"}, []adapter.ObjectKind{adapter.KindTable}, "", false},
+		{"singular form", []string{"view"}, []adapter.ObjectKind{adapter.KindView}, "", false},
+		{"short form", []string{"procs", "funcs"}, []adapter.ObjectKind{adapter.KindProcedure, adapter.KindFunction}, "", false},
+		{"kinds + substring", []string{"views", "procedures", "order"}, []adapter.ObjectKind{adapter.KindView, adapter.KindProcedure}, "order", false},
+		{"substring before kinds", []string{"order", "tables"}, []adapter.ObjectKind{adapter.KindTable}, "order", false},
+		{"dedupe kinds", []string{"tables", "table"}, []adapter.ObjectKind{adapter.KindTable}, "", false},
+		{"case insensitive kind", []string{"TABLES"}, []adapter.ObjectKind{adapter.KindTable}, "", false},
+		{"two substrings error", []string{"foo", "bar"}, nil, "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			kinds, sub, errMsg := parseObjectArgs(c.args)
+			if (errMsg != "") != c.wantErr {
+				t.Fatalf("errMsg=%q wantErr=%v", errMsg, c.wantErr)
+			}
+			if c.wantErr {
+				return
+			}
+			if sub != c.wantSub {
+				t.Errorf("substr=%q want %q", sub, c.wantSub)
+			}
+			if len(kinds) != len(c.wantKinds) {
+				t.Fatalf("kinds=%v want %v", kinds, c.wantKinds)
+			}
+			for i := range kinds {
+				if kinds[i] != c.wantKinds[i] {
+					t.Errorf("kinds[%d]=%q want %q", i, kinds[i], c.wantKinds[i])
+				}
+			}
+		})
+	}
+}
 
 func TestIsQuery(t *testing.T) {
 	queries := []string{"select 1", "SELECT * FROM t", "  with x as (...) select", "EXPLAIN select 1", "values (1)", "table foo"}

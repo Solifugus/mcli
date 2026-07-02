@@ -8,8 +8,15 @@ import (
 )
 
 // ErrUnsupported is returned by adapter methods a given database cannot support
-// (e.g. lineage on a driver that has no catalog for it).
+// (e.g. lineage on a driver that has no catalog for it). It corresponds to an
+// unadvertised Capability: the engine can't do this.
 var ErrUnsupported = errors.New("operation not supported by this adapter")
+
+// ErrUnauthorized is returned when the engine supports an operation but the
+// connected login lacks the catalog privileges to perform it (e.g. reading the
+// scheduler or security catalogs). It is distinct from ErrUnsupported so a
+// front-end can say "you lack permission" rather than "this database can't".
+var ErrUnauthorized = errors.New("not authorized for this operation with the current login")
 
 // Factory builds a fresh, unconnected adapter.
 type Factory func() Adapter

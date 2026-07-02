@@ -8,8 +8,36 @@ import (
 	"strings"
 
 	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/adapter"
+	"github.com/Solifugus/mcli/internal/core/assist"
 	"github.com/Solifugus/mcli/internal/core/safety"
 )
+
+// uiArgs is the common argument shape for the single-target ui_* guidance tools.
+type uiArgs struct {
+	Target string `json:"target"`
+	Text   string `json:"text"`
+}
+
+// guideHandler builds a tool handler that decodes uiArgs, maps them to an
+// assist.Event via build, and publishes it through the core's guidance channel.
+// A missing target is rejected; a missing live session surfaces as an error so
+// the AI learns its guidance had no surface to render on.
+func guideHandler(build func(uiArgs) assist.Event) func(context.Context, *core.Core, json.RawMessage) (string, error) {
+	return func(_ context.Context, c *core.Core, args json.RawMessage) (string, error) {
+		var a uiArgs
+		if err := decode(args, &a); err != nil {
+			return "", err
+		}
+		if a.Target == "" {
+			return "", errors.New("target is required")
+		}
+		if err := c.Guide(build(a)); err != nil {
+			return "", err
+		}
+		return "guidance delivered to the live session", nil
+	}
+}
 
 // tool is one MCP tool: a JSON-schema-described wrapper over a core function.
 type tool struct {
@@ -82,8 +110,22 @@ func objectSchema(props map[string]any, required ...string) map[string]any {
 	return s
 }
 
-func strProp(desc string) map[string]any  { return map[string]any{"type": "string", "description": desc} }
-func boolProp(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
+func strProp(desc string) map[string]any {
+	return map[string]any{"type": "string", "description": desc}
+}
+func boolProp(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
+
+// strArrayProp describes an array-of-strings parameter, optionally constrained
+// to an enum of allowed values.
+func strArrayProp(desc string, enum ...string) map[string]any {
+	items := map[string]any{"type": "string"}
+	if len(enum) > 0 {
+		items["enum"] = enum
+	}
+	return map[string]any{"type": "array", "items": items, "description": desc}
+}
 
 // jsonString marshals v to indented JSON for a text result.
 func jsonString(v any) (string, error) {
@@ -228,6 +270,30 @@ func buildTools() []tool {
 
 		// --- schema browsing ---
 		{
+			Name:        "get_capabilities",
+			Description: "Report which optional features the connected engine supports (explain, lineage, source, table_functions, jobs, security, security_edit). Use it to decide whether a feature is available before calling its tool.",
+			Schema:      objectSchema(nil),
+			Handle: func(_ context.Context, c *core.Core, _ json.RawMessage) (string, error) {
+				if !c.Connected() {
+					return "", core.ErrNotConnected
+				}
+				caps := c.Capabilities()
+				all := map[string]bool{}
+				for _, cap := range adapter.AllCapabilities() {
+					all[string(cap)] = caps.Has(cap)
+				}
+				supported := make([]string, 0, len(caps))
+				for _, cap := range caps.Sorted() {
+					supported = append(supported, string(cap))
+				}
+				return jsonString(map[string]any{
+					"server":    c.ConnServer(),
+					"supported": supported,
+					"all":       all,
+				})
+			},
+		},
+		{
 			Name:        "list_databases",
 			Description: "List databases on the connected server.",
 			Schema:      objectSchema(nil),
@@ -338,6 +404,378 @@ func buildTools() []tool {
 				return jsonString(nonNil(views))
 			},
 		},
+		{
+			Name:        "search_objects",
+			Description: "Find database objects by type and name substring. 'kinds' filters by object kind (any of table, view, procedure, function; omit or empty for all kinds); 'substring' matches the object name case-insensitively (omit or empty for all names).",
+			Schema: objectSchema(map[string]any{
+				"kinds":     strArrayProp("object kinds to include", "table", "view", "procedure", "function"),
+				"substring": strProp("case-insensitive substring to match against object names"),
+			}),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Kinds     []string `json:"kinds"`
+					Substring string   `json:"substring"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				kinds := make([]adapter.ObjectKind, 0, len(a.Kinds))
+				for _, k := range a.Kinds {
+					kinds = append(kinds, adapter.ObjectKind(k))
+				}
+				refs, err := c.SearchObjects(ctx, kinds, a.Substring)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(nonNil(refs))
+			},
+		},
+		{
+			Name:        "get_source",
+			Description: "Get the definition text (CREATE / body) of a view, procedure, or function. Requires the 'source' capability (see get_capabilities). Tables have no stored definition — use describe_table for their design.",
+			Schema:      objectSchema(map[string]any{"name": strProp("object name, optionally schema-qualified (schema.name)")}, "name"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct{ Name string }
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" {
+					return "", errors.New("name is required")
+				}
+				src, err := c.Source(ctx, a.Name)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(map[string]any{
+					"schema":   src.Ref.Schema,
+					"name":     src.Ref.Name,
+					"type":     src.Ref.Type,
+					"language": src.Language,
+					"body":     src.Body,
+				})
+			},
+		},
+		{
+			Name:        "search_routines",
+			Description: "Find procedures and functions whose name or body contains the given text (case-insensitive). The body search that complements search_objects (which matches names only). Requires the 'source' capability.",
+			Schema:      objectSchema(map[string]any{"text": strProp("substring to match against routine names and bodies")}, "text"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct{ Text string }
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				refs, err := c.SearchRoutines(ctx, a.Text)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(nonNil(refs))
+			},
+		},
+		{
+			Name:        "search_table_functions",
+			Description: "Find table-valued functions (functions that return a rowset) whose name matches the given substring. Each result includes a dialect-correct query template that reads it as tabular data. Requires the 'table_functions' capability (see get_capabilities).",
+			Schema:      objectSchema(map[string]any{"substring": strProp("case-insensitive substring to match against table-function names")}),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Substring string `json:"substring"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				refs, err := c.SearchTableFunctions(ctx, a.Substring)
+				if err != nil {
+					return "", err
+				}
+				type tfView struct {
+					Schema string `json:"schema"`
+					Name   string `json:"name"`
+					Query  string `json:"query"`
+				}
+				views := make([]tfView, 0, len(refs))
+				for _, r := range refs {
+					views = append(views, tfView{Schema: r.Schema, Name: r.Name, Query: c.TabularQuery(r)})
+				}
+				return jsonString(views)
+			},
+		},
+
+		// --- scheduling: jobs / agents (design §29) ---
+		{
+			Name:        "list_jobs",
+			Description: "List scheduled jobs (SQL Server Agent jobs, Oracle Scheduler jobs, or MySQL events) whose name matches the given substring (omit or empty for all). Requires the 'jobs' capability (see get_capabilities); engines without a scheduler (e.g. Postgres) do not advertise it.",
+			Schema:      objectSchema(map[string]any{"substring": strProp("case-insensitive substring to match against job names")}),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Substring string `json:"substring"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				jobs, err := c.ListJobs(ctx, a.Substring)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(nonNil(jobs))
+			},
+		},
+		{
+			Name:        "describe_job",
+			Description: "Describe a scheduled job's design: its owner, schedule, next/last run, comment, and ordered steps. Requires the 'jobs' capability.",
+			Schema:      objectSchema(map[string]any{"name": strProp("job / event name")}, "name"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct{ Name string }
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" {
+					return "", errors.New("name is required")
+				}
+				job, err := c.DescribeJob(ctx, a.Name)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(job)
+			},
+		},
+		{
+			Name:        "job_history",
+			Description: "Return recent run records for a scheduled job, newest first (each with start, status, and message). 'limit' caps the count (omit or 0 for the engine default). MySQL events keep no run history and return an empty list. Requires the 'jobs' capability.",
+			Schema: objectSchema(map[string]any{
+				"name":  strProp("job / event name"),
+				"limit": map[string]any{"type": "integer", "description": "maximum number of runs to return (0 = engine default)"},
+			}, "name"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Name  string `json:"name"`
+					Limit int    `json:"limit"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" {
+					return "", errors.New("name is required")
+				}
+				runs, err := c.JobHistory(ctx, a.Name, a.Limit)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(nonNil(runs))
+			},
+		},
+
+		// --- security: users / roles / grants (design §29, read side) ---
+		{
+			Name:        "list_principals",
+			Description: "List security principals (users and/or roles). 'kind' filters by 'user' or 'role' (omit or empty for both); 'substring' matches the name case-insensitively. Requires the 'security' capability (see get_capabilities).",
+			Schema: objectSchema(map[string]any{
+				"kind":      map[string]any{"type": "string", "enum": []string{"user", "role"}, "description": "filter to users or roles (omit for both)"},
+				"substring": strProp("case-insensitive substring to match against principal names"),
+			}),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Kind      string `json:"kind"`
+					Substring string `json:"substring"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				refs, err := c.ListPrincipals(ctx, a.Kind, a.Substring)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(nonNil(refs))
+			},
+		},
+		{
+			Name:        "describe_principal",
+			Description: "Describe a security principal (user or role): its attributes, role membership, members, and grants. Requires the 'security' capability.",
+			Schema:      objectSchema(map[string]any{"name": strProp("principal name (for MySQL, \"user@host\")")}, "name"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct{ Name string }
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" {
+					return "", errors.New("name is required")
+				}
+				p, err := c.DescribePrincipal(ctx, a.Name)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(p)
+			},
+		},
+
+		// --- security editing: guarded DCL (design §21, §29) ---
+		// Each tool BUILDS the dialect-correct statement in the core, then runs it
+		// through runSQL — the same guarded path as run_query — so read-only mode,
+		// production, and dangerous-statement guards apply identically. GRANT/CREATE
+		// are plain writes (blocked in read-only, confirmed on prod); DROP is
+		// dangerous and needs confirm=true.
+		{
+			Name:        "grant",
+			Description: "Grant or revoke privileges or a role. With 'on' set, grants the 'privileges' ON that object; without 'on', 'privileges' are role names granted directly. Set 'revoke':true for REVOKE. Requires the 'security_edit' capability. Runs through the safety guard: refused in read-only mode, confirmed on production (confirm=true).",
+			Schema: objectSchema(map[string]any{
+				"privileges": strArrayProp("privileges to grant (e.g. SELECT, INSERT) — or role names when 'on' is omitted"),
+				"on":         strProp("object to grant on (schema.table); omit for a role grant"),
+				"to":         strProp("principal (for MySQL, \"user@host\")"),
+				"revoke":     boolProp("REVOKE instead of GRANT"),
+				"confirm":    boolProp("authorize a statement flagged for confirmation (production/dangerous)"),
+			}, "privileges", "to"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Privileges []string `json:"privileges"`
+					On         string   `json:"on"`
+					To         string   `json:"to"`
+					Revoke     bool     `json:"revoke"`
+					Confirm    bool     `json:"confirm"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.To == "" {
+					return "", errors.New("to is required")
+				}
+				dcl, err := c.BuildGrant(a.Privileges, a.On, a.To, a.Revoke)
+				if err != nil {
+					return "", err
+				}
+				return runGeneratedDCL(ctx, c, dcl, a.Confirm)
+			},
+		},
+		{
+			Name:        "create_user",
+			Description: "Create a user/login with a password (dialect-correct). Requires the 'security_edit' capability. Runs through the safety guard (refused in read-only mode, confirmed on production).",
+			Schema: objectSchema(map[string]any{
+				"name":     strProp("user/login name (for MySQL, \"user@host\")"),
+				"password": strProp("the new user's password"),
+				"confirm":  boolProp("authorize a statement flagged for confirmation (production)"),
+			}, "name", "password"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Name     string `json:"name"`
+					Password string `json:"password"`
+					Confirm  bool   `json:"confirm"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" || a.Password == "" {
+					return "", errors.New("name and password are required")
+				}
+				dcl, err := c.BuildCreateUser(a.Name, a.Password)
+				if err != nil {
+					return "", err
+				}
+				return runGeneratedDCL(ctx, c, dcl, a.Confirm)
+			},
+		},
+		{
+			Name:        "drop_user",
+			Description: "Drop a user/login/role (dialect-correct). Requires the 'security_edit' capability. DROP is dangerous, so this needs confirm=true and is blocked on production servers configured to block dangerous statements.",
+			Schema: objectSchema(map[string]any{
+				"name":    strProp("user/login/role name (for MySQL, \"user@host\")"),
+				"confirm": boolProp("authorize the DROP (required — DROP is dangerous)"),
+			}, "name"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Name    string `json:"name"`
+					Confirm bool   `json:"confirm"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" {
+					return "", errors.New("name is required")
+				}
+				dcl, err := c.BuildDropUser(a.Name)
+				if err != nil {
+					return "", err
+				}
+				return runGeneratedDCL(ctx, c, dcl, a.Confirm)
+			},
+		},
+
+		// --- UI guidance (design §26): guide the user in their live surface.
+		// These publish to the assist bus and only take effect when a front-end
+		// (TUI/GUI) is attached; otherwise they report no live session. All are
+		// non-destructive — a prefill fills an input, it never executes. ---
+		{
+			Name:        "ui_describe_screen",
+			Description: "Report the active front-end surface and the semantic target ids that UI guidance can address (e.g. input-line, editor, grid). Returns live:false when no TUI/GUI is attached. Call this before ui_* guidance to choose valid targets.",
+			Schema:      objectSchema(nil),
+			Handle: func(_ context.Context, c *core.Core, _ json.RawMessage) (string, error) {
+				return jsonString(map[string]any{
+					"live":    c.LiveSession(),
+					"targets": []string{assist.TargetInputLine, assist.TargetEditor, assist.TargetGrid, assist.TargetResults},
+				})
+			},
+		},
+		{
+			Name:        "ui_highlight",
+			Description: "Draw the user's attention to an element in their live surface (the front-end pulses/blinks it). 'target' is a semantic id from ui_describe_screen.",
+			Schema:      objectSchema(map[string]any{"target": strProp("semantic element id, e.g. input-line")}, "target"),
+			Handle:      guideHandler(func(a uiArgs) assist.Event { return assist.Event{Kind: assist.KindHighlight, Target: a.Target} }),
+		},
+		{
+			Name:        "ui_focus",
+			Description: "Move focus to an element in the user's live surface. 'target' is a semantic id from ui_describe_screen.",
+			Schema:      objectSchema(map[string]any{"target": strProp("semantic element id, e.g. input-line")}, "target"),
+			Handle:      guideHandler(func(a uiArgs) assist.Event { return assist.Event{Kind: assist.KindFocus, Target: a.Target} }),
+		},
+		{
+			Name:        "ui_prefill",
+			Description: "Put text into an input in the user's live surface WITHOUT submitting it — e.g. stage a SQL statement on the REPL input line for the user to review and run. Non-destructive.",
+			Schema: objectSchema(map[string]any{
+				"target": strProp("semantic input id, e.g. input-line"),
+				"text":   strProp("text to place in the input (not executed)"),
+			}, "target", "text"),
+			Handle: guideHandler(func(a uiArgs) assist.Event {
+				return assist.Event{Kind: assist.KindPrefill, Target: a.Target, Text: a.Text}
+			}),
+		},
+		{
+			Name:        "ui_annotate",
+			Description: "Attach an explanatory callout to an element in the user's live surface.",
+			Schema: objectSchema(map[string]any{
+				"target": strProp("semantic element id"),
+				"text":   strProp("callout text to show the user"),
+			}, "target", "text"),
+			Handle: guideHandler(func(a uiArgs) assist.Event {
+				return assist.Event{Kind: assist.KindAnnotate, Target: a.Target, Text: a.Text}
+			}),
+		},
+		{
+			Name:        "ui_demo",
+			Description: "Walk the user through a task as an ordered, narrated sequence of steps rendered in their live surface. Each step has a title and description; optionally a target element and a suggested action (e.g. text to type).",
+			Schema: objectSchema(map[string]any{
+				"steps": map[string]any{
+					"type":        "array",
+					"description": "ordered walkthrough steps",
+					"items": objectSchema(map[string]any{
+						"title":       strProp("short step title"),
+						"description": strProp("what the user should understand or do"),
+						"target":      strProp("optional semantic element id this step concerns"),
+						"action":      strProp("optional suggested action, e.g. text to type"),
+					}, "title", "description"),
+				},
+			}, "steps"),
+			Handle: func(_ context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Steps []assist.Step `json:"steps"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if len(a.Steps) == 0 {
+					return "", errors.New("steps is required and must be non-empty")
+				}
+				if err := c.Guide(assist.Event{Kind: assist.KindDemo, Steps: a.Steps}); err != nil {
+					return "", err
+				}
+				return "guidance delivered to the live session", nil
+			},
+		},
 
 		// --- workspace files ---
 		{
@@ -436,7 +874,7 @@ func buildTools() []tool {
 
 		// --- linting ---
 		{
-			Name: "lint_sql",
+			Name:        "lint_sql",
 			Description: "Lint SQL for safety/correctness, lexical syntax, and style issues. Static; needs no connection and never executes the SQL. With live=true and a connection, also validates each query against the live database (deep syntax, unknown tables/columns) via EXPLAIN. Returns a JSON array of findings.",
 			Schema: objectSchema(map[string]any{
 				"sql":  strProp("the SQL to lint"),
@@ -523,6 +961,18 @@ func buildTools() []tool {
 			},
 		},
 	}
+}
+
+// runGeneratedDCL executes a generated security-editing statement through the
+// same guarded path as run_query (runSQL), returning the statement alongside its
+// result so the caller sees exactly what ran. The safety guard is the single
+// chokepoint: read-only refuses, production/dangerous requires confirm=true.
+func runGeneratedDCL(ctx context.Context, c *core.Core, dcl string, confirm bool) (string, error) {
+	out, err := runSQL(ctx, c, dcl, confirm)
+	if err != nil {
+		return "", err
+	}
+	return dcl + "\n" + out, nil
 }
 
 // runSQL applies the safety policy then executes. SELECT-style reads stream
