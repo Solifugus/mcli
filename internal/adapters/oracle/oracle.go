@@ -316,13 +316,56 @@ func (a *Adapter) SearchViews(ctx context.Context, text string) ([]adapter.Objec
 		 ORDER BY owner, view_name`, text)
 }
 
-// Lineage is not yet implemented for Oracle (design §19, a later phase).
-func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// depKindCase maps all_dependencies TYPE / REFERENCED_TYPE to our ObjectKind
+// labels; the %s picks which column.
+const depKindCase = `CASE %s WHEN 'VIEW' THEN 'view' WHEN 'TABLE' THEN 'table'
+       WHEN 'PROCEDURE' THEN 'procedure' WHEN 'FUNCTION' THEN 'function'
+       ELSE LOWER(%s) END`
+
+// GetPreLineage returns the objects the named object depends on (its inputs),
+// one hop, from all_dependencies (objects visible to the current user).
+func (a *Adapter) GetPreLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT referenced_owner, referenced_name, ` +
+		fmt.Sprintf(depKindCase, "referenced_type", "referenced_type") + `
+FROM all_dependencies
+WHERE name = :1 AND owner = NVL(:2, SYS_CONTEXT('USERENV','CURRENT_SCHEMA'))
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
 }
 
-func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// GetPostLineage returns the objects that depend on the named object (its
+// consumers), one hop.
+func (a *Adapter) GetPostLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT owner, name, ` + fmt.Sprintf(depKindCase, "type", "type") + `
+FROM all_dependencies
+WHERE referenced_name = :1 AND referenced_owner = NVL(:2, SYS_CONTEXT('USERENV','CURRENT_SCHEMA'))
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
+}
+
+// queryLineage runs a lineage query whose binds are (:1) the upper-cased object
+// name and (:2) the optional owner, returning (owner, name, kind) rows.
+func (a *Adapter) queryLineage(ctx context.Context, query, name string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	schema, obj := splitName(name)
+	obj = strings.ToUpper(obj)
+	schemaArg := sql.NullString{String: strings.ToUpper(schema), Valid: schema != ""}
+	rows, err := a.db.QueryContext(ctx, query, obj, schemaArg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.ObjectRef
+	for rows.Next() {
+		var ref adapter.ObjectRef
+		if err := rows.Scan(&ref.Schema, &ref.Name, &ref.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 // Source returns the definition text of a view, procedure, or function via
@@ -600,7 +643,7 @@ func (a *Adapter) DescribePrincipal(ctx context.Context, name string) (adapter.P
 // TabularQuery already emits Oracle's TABLE(...) syntax. Other features arrive in
 // later phases.
 func (a *Adapter) Capabilities() adapter.CapabilitySet {
-	return adapter.Caps(adapter.CapSource, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
+	return adapter.Caps(adapter.CapLineage, adapter.CapSource, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectOracle }

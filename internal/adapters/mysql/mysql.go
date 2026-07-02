@@ -320,13 +320,51 @@ func (a *Adapter) SearchViews(ctx context.Context, text string) ([]adapter.Objec
 		 ORDER BY TABLE_SCHEMA, TABLE_NAME`, text, text)
 }
 
-// Lineage is not yet implemented for MySQL (design §19, a later phase).
-func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// GetPreLineage returns the tables and views the named view selects from (its
+// inputs), one hop, from information_schema.VIEW_TABLE_USAGE (MySQL 8.0.13+).
+// MySQL tracks dependencies only for views, so a base table has no pre-lineage.
+func (a *Adapter) GetPreLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT u.TABLE_SCHEMA, u.TABLE_NAME,
+       CASE WHEN t.TABLE_TYPE = 'VIEW' THEN 'view' ELSE 'table' END
+FROM information_schema.VIEW_TABLE_USAGE u
+LEFT JOIN information_schema.TABLES t
+       ON t.TABLE_SCHEMA = u.TABLE_SCHEMA AND t.TABLE_NAME = u.TABLE_NAME
+WHERE u.VIEW_NAME = ? AND u.VIEW_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE())
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
 }
 
-func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// GetPostLineage returns the views that select from the named table or view
+// (its consumers), one hop.
+func (a *Adapter) GetPostLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT DISTINCT u.VIEW_SCHEMA, u.VIEW_NAME, 'view'
+FROM information_schema.VIEW_TABLE_USAGE u
+WHERE u.TABLE_NAME = ? AND u.TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE())
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
+}
+
+// queryLineage runs a lineage query bound to (name, schema) and returns
+// (schema, name, kind) rows.
+func (a *Adapter) queryLineage(ctx context.Context, query, name string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	schema, obj := splitName(name)
+	rows, err := a.db.QueryContext(ctx, query, obj, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.ObjectRef
+	for rows.Next() {
+		var ref adapter.ObjectRef
+		if err := rows.Scan(&ref.Schema, &ref.Name, &ref.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 // Source returns the definition text of a view (VIEW_DEFINITION) or a
@@ -569,9 +607,9 @@ func escapeMySQLLiteral(s string) string {
 // events (as jobs), and account/security introspection (mysql.user + SHOW
 // GRANTS). It has no table-valued functions (only scalar), so CapTableFunctions
 // is not advertised; its roles are not cleanly separable in the catalog, so the
-// role listing is best-effort. Lineage is not yet implemented.
+// role listing is best-effort. Lineage covers views only (VIEW_TABLE_USAGE).
 func (a *Adapter) Capabilities() adapter.CapabilitySet {
-	return adapter.Caps(adapter.CapExplain, adapter.CapSource, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
+	return adapter.Caps(adapter.CapExplain, adapter.CapLineage, adapter.CapSource, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectMySQL }

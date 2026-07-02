@@ -462,3 +462,19 @@ func TestCallSecurityEditToolsNoConnection(t *testing.T) {
 		}
 	}
 }
+
+func TestLineageToolInList(t *testing.T) {
+	resps := drive(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	b, _ := json.Marshal(resps[0].Result)
+	if !strings.Contains(string(b), `"get_lineage"`) {
+		t.Errorf("tools/list missing get_lineage")
+	}
+}
+
+func TestCallGetLineageNoConnection(t *testing.T) {
+	resps := drive(t, call("get_lineage", map[string]any{"name": "some_view", "direction": "pre"}))
+	text, isErr := toolText(t, resps[0])
+	if !isErr {
+		t.Errorf("get_lineage without a connection should be an isError result, got %q", text)
+	}
+}

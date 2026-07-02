@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Solifugus/mcli/internal/core"
+	"github.com/Solifugus/mcli/internal/core/adapter"
 	"github.com/Solifugus/mcli/internal/core/config"
 )
 
@@ -308,5 +309,55 @@ func TestDispatchSecurityEditUsage(t *testing.T) {
 	}
 	if r, _ := m.handleLine(`.dropuser`); !strings.Contains(joinLines(r), "usage:") {
 		t.Errorf(".dropuser with no args should show usage, got %q", joinLines(r))
+	}
+}
+
+func TestDispatchLineageUsage(t *testing.T) {
+	m := newTestModel(t)
+	for _, cmd := range []string{`.pre-lineage`, `.post-lineage`} {
+		if r := dispatch(m, cmd); !strings.Contains(joinLines(r), "usage:") {
+			t.Errorf("%s with no args should show usage, got %q", cmd, joinLines(r))
+		}
+	}
+}
+
+// TestDispatchLineageAsync confirms .pre-lineage / .post-lineage route to a
+// background runner (the walk needs a connection).
+func TestDispatchLineageAsync(t *testing.T) {
+	m := newTestModel(t)
+	for _, cmd := range []string{`.pre-lineage v`, `.post-lineage t`} {
+		res, act := m.handleLine(cmd)
+		if act.async == nil {
+			t.Errorf("%q should dispatch to a background runner", cmd)
+		}
+		if len(res.lines) != 0 {
+			t.Errorf("%q immediate output should be empty, got %v", cmd, res.lines)
+		}
+	}
+}
+
+func TestRenderLineageTree(t *testing.T) {
+	g := core.LineageGraph{
+		Root:      adapter.ObjectRef{Schema: "s", Name: "v"},
+		Direction: "pre",
+		Edges: []core.LineageEdge{
+			{From: adapter.ObjectRef{Schema: "s", Name: "a", Type: "table"}, To: adapter.ObjectRef{Schema: "s", Name: "v"}},
+			{From: adapter.ObjectRef{Schema: "s", Name: "b", Type: "view"}, To: adapter.ObjectRef{Schema: "s", Name: "v"}},
+			{From: adapter.ObjectRef{Schema: "s", Name: "base", Type: "table"}, To: adapter.ObjectRef{Schema: "s", Name: "b"}},
+		},
+	}
+	out := joinLines(cmdResult{lines: renderLineage(g)})
+	for _, want := range []string{"s.v depends on", "s.a (table)", "s.b (view)", "s.base (table)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderLineage output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderLineageEmpty(t *testing.T) {
+	g := core.LineageGraph{Root: adapter.ObjectRef{Name: "t"}, Direction: "post"}
+	out := joinLines(cmdResult{lines: renderLineage(g)})
+	if !strings.Contains(out, "no dependencies found") {
+		t.Errorf("empty graph should say none, got %q", out)
 	}
 }

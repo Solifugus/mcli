@@ -397,6 +397,79 @@ func TestLiveSecurityEditDCL(t *testing.T) {
 	}
 }
 
+// TestLiveLineage builds a small table -> view -> view chain and confirms the
+// one-hop pre/post lineage reads the dependency both ways, then drops it.
+func TestLiveLineage(t *testing.T) {
+	a := liveAdapter(t)
+	ctx := context.Background()
+
+	const base = "mcli_lin_probe_t"
+	const v1 = "mcli_lin_probe_v1"
+	const v2 = "mcli_lin_probe_v2"
+
+	cleanup := func() {
+		_, _ = a.RunStatement(ctx, `DROP VIEW IF EXISTS `+v2)
+		_, _ = a.RunStatement(ctx, `DROP VIEW IF EXISTS `+v1)
+		_, _ = a.RunStatement(ctx, `DROP TABLE IF EXISTS `+base)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	if _, err := a.RunStatement(ctx, `CREATE TABLE `+base+` (id int)`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+			t.Skipf("login lacks CREATE on the schema; cannot exercise lineage: %v", err)
+		}
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := a.RunStatement(ctx, `CREATE VIEW `+v1+` AS SELECT id FROM `+base); err != nil {
+		t.Fatalf("create v1: %v", err)
+	}
+	if _, err := a.RunStatement(ctx, `CREATE VIEW `+v2+` AS SELECT id FROM `+v1); err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+
+	// Pre-lineage of v1: it selects from the base table.
+	pre, err := a.GetPreLineage(ctx, v1)
+	if err != nil {
+		t.Fatalf("GetPreLineage(v1): %v", err)
+	}
+	if !hasObject(pre, base) {
+		t.Errorf("pre-lineage of %s should include %s; got %v", v1, base, pre)
+	}
+
+	// Post-lineage of the base table: v1 depends on it.
+	post, err := a.GetPostLineage(ctx, base)
+	if err != nil {
+		t.Fatalf("GetPostLineage(base): %v", err)
+	}
+	if !hasObject(post, v1) {
+		t.Errorf("post-lineage of %s should include %s; got %v", base, v1, post)
+	}
+
+	// Pre-lineage of v2: it selects from v1 (a view), classified as a view.
+	pre2, err := a.GetPreLineage(ctx, v2)
+	if err != nil {
+		t.Fatalf("GetPreLineage(v2): %v", err)
+	}
+	for _, r := range pre2 {
+		if r.Name == v1 && r.Type != "view" {
+			t.Errorf("expected %s classified as view, got %q", v1, r.Type)
+		}
+	}
+	if !hasObject(pre2, v1) {
+		t.Errorf("pre-lineage of %s should include %s; got %v", v2, v1, pre2)
+	}
+}
+
+func hasObject(refs []adapter.ObjectRef, name string) bool {
+	for _, r := range refs {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func containsStr(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {

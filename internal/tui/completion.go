@@ -7,7 +7,7 @@ import "strings"
 var replCommands = []string{
 	`.ai`, `.assist`, `.caps`, `.cat`, `.clear`, `.connect`, `.copy`, `.delete`, `.describe`, `.disconnect`,
 	`.edit`, `.enter`, `.export`, `.files`, `.grid`, `.help`, `.import`,
-	`.createuser`, `.dropuser`, `.find`, `.grant`, `.grep`, `.job`, `.jobs`, `.lint`, `.list`, `.mcp`, `.objects`, `.readonly`, `.revoke`, `.role`, `.roles`, `.run`, `.quit`, `.rename`, `.server`, `.source`, `.tablefuncs`, `.tvf`, `.user`, `.users`, `.workspace`, "use",
+	`.createuser`, `.dropuser`, `.find`, `.grant`, `.grep`, `.job`, `.jobs`, `.lint`, `.list`, `.mcp`, `.objects`, `.post-lineage`, `.pre-lineage`, `.readonly`, `.revoke`, `.role`, `.roles`, `.run`, `.quit`, `.rename`, `.server`, `.source`, `.tablefuncs`, `.tvf`, `.user`, `.users`, `.workspace`, "use",
 }
 
 // aiSubcommands are the second-token completions for .ai.

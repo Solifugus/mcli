@@ -88,6 +88,12 @@ func (m *Model) handleLine(line string) (cmdResult, action) {
 	case `.grep`:
 		res, run := m.cmdGrep(args)
 		return res, async(run)
+	case `.pre-lineage`:
+		res, run := m.cmdLineage(args, core.LineagePre)
+		return res, async(run)
+	case `.post-lineage`:
+		res, run := m.cmdLineage(args, core.LineagePost)
+		return res, async(run)
 	case `.tablefuncs`, `.tvf`:
 		res, run := m.cmdTableFuncs(args)
 		return res, async(run)
@@ -651,6 +657,8 @@ var helpSections = []helpSection{
 		{".describe", "<table>", "show columns"},
 		{".source", "<view|procedure|function>", "show an object's definition text"},
 		{".grep", "<text>", "search procedure/function names and bodies"},
+		{".pre-lineage", "<object> [depth]", "objects this one depends on (its inputs)"},
+		{".post-lineage", "<object> [depth]", "objects that depend on this one (its consumers)"},
 		{".tablefuncs", "[<substr>]", "list table-valued functions + query template (alias .tvf)"},
 		{".caps", "", "show what the connected engine supports"},
 	}},

@@ -35,9 +35,9 @@ func (c *Core) Explain(ctx context.Context, sql string) (adapter.Plan, error) {
 	return c.conn.ExplainQuery(ctx, sql)
 }
 
-// PreLineage returns the objects the named object depends on (its inputs).
-// Currently unsupported by every adapter (design §19); surfaced now so the
-// capability plumbing is complete end to end. Gate on Supports(CapLineage).
+// PreLineage returns the objects the named object depends on (its inputs), one
+// hop only. For the assembled multi-level graph use Lineage; this single-hop
+// accessor is what that walk is built on. Gate on Supports(CapLineage).
 func (c *Core) PreLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
 	if c.conn == nil {
 		return nil, ErrNotConnected

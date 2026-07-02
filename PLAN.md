@@ -91,9 +91,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
   CLI `.grant`/`.revoke`/`.createuser`/`.dropuser`, MCP `grant`/`create_user`/
   `drop_user`. Comprehensive DB-free builder tests + live-PG CREATE→GRANT→REVOKE→DROP
   round-trip (skips without CREATEROLE). **This completes the Security area and all of
-  Phases 16–21 (the four-area capability model).** **Next up: Phase 22** (Lineage flow
-  chart — real `GetPreLineage`/`GetPostLineage`). Phase 15 (GUI assist renderer) still
-  follows.
+  Phases 16–21 (the four-area capability model).**
+- **Phase 22 (Lineage flow chart) is DONE.** Real one-hop `GetPreLineage`/`GetPostLineage`
+  per engine (PG `pg_depend`/`pg_rewrite`, MSSQL `sys.sql_expression_dependencies`,
+  Oracle `all_dependencies`, MySQL `VIEW_TABLE_USAGE`; DB2 deferred), `CapLineage`
+  advertised. The **graph is assembled in the core** (`Lineage` walks one-hop edges
+  breadth-first, cycle-safe, depth/size-bounded, edges normalized to data-flow
+  direction) so all front-ends render the same edge set. CLI `.pre-lineage`/
+  `.post-lineage <object> [depth]` (indented tree), MCP `get_lineage`. Pure BFS unit
+  tests + live-PG table→view→view round-trip. **The four-area roadmap (16–22) is now
+  fully implemented.** **Next up: Phase 15** (GUI assist renderer) — the only deferred item.
 - **Command prefix is now `.`** (was `\`): swept across dispatch, help, completion,
   banner, core/safety/MCP messages, tests, and all docs incl. the design doc. A
   stray `\command` reports unknown with a migration hint. `use <db>` stays bare.
@@ -478,7 +485,15 @@ before Phase 15).
       end-to-end CREATE→GRANT→REVOKE→DROP round-trip (skips gracefully when the login
       lacks CREATEROLE — the `ErrUnauthorized` boundary)
 
-## Phase 22 — Lineage flow chart
-- [ ] Real `GetPreLineage`/`GetPostLineage` per engine (`CapLineage`); edges in core,
-      graph rendered by front-ends
-- [ ] Core + CLI + MCP; tests
+## Phase 22 — Lineage flow chart ✅
+- [x] Real `GetPreLineage`/`GetPostLineage` per engine (`CapLineage`): PG
+      (`pg_depend`/`pg_rewrite`), MSSQL (`sys.sql_expression_dependencies`), Oracle
+      (`all_dependencies`), MySQL (`VIEW_TABLE_USAGE`, views only); DB2 deferred
+- [x] Edges assembled in the core: `Lineage(name, dir, depth)` walks the one-hop
+      accessors breadth-first — cycle-safe, depth- and node-bounded (`Truncated`),
+      edges normalized to data-flow direction; `Children` helper for tree rendering
+- [x] CLI `.pre-lineage`/`.post-lineage <object> [depth]` (indented tree, cycle-marked);
+      MCP `get_lineage` (direction + depth → graph JSON); `.caps` already lists lineage
+- [x] Tests: pure BFS matrix (multi-level, cycles, depth bound, node cap, direction,
+      error propagation, `Children`), gating, MCP tool-in-list/no-conn, TUI usage +
+      render, live-PG table→view→view round-trip (skips without CREATE)

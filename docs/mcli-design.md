@@ -843,9 +843,17 @@ first; the GUI consumes it later (§28).
   columns; the front-end swaps axes.
 - **Processing** — stored procedures. Search names or **within bodies** (generalizing
   the existing view-definition grep); show procedure **source** (new `AdapterSource`
-  primitive, shared with Data-design); a lineage flow chart (real
-  `GetPreLineage`/`GetPostLineage`, deferred as the most expensive item). The graph
-  is drawn by the front-end; the core supplies edges.
+  primitive, shared with Data-design); a lineage flow chart (implemented, §22-phase).
+  Each adapter supplies one-hop `GetPreLineage`/`GetPostLineage` from its dependency
+  catalog (PG `pg_depend`/`pg_rewrite`, SQL Server `sys.sql_expression_dependencies`,
+  Oracle `all_dependencies`, MySQL `information_schema.VIEW_TABLE_USAGE` — views only;
+  DB2 deferred), advertised via `CapLineage`. **The core assembles the graph**:
+  `Lineage(name, dir, depth)` walks the one-hop accessors breadth-first — cycle-safe,
+  bounded by depth and node count (reporting `Truncated`), with edges normalized to
+  data-flow direction (source → consumer) so a pre-walk and a post-walk over the same
+  objects yield the same edge set. The front-end draws the graph (CLI `.pre-lineage`/
+  `.post-lineage` render it as an indented tree; MCP `get_lineage` returns the edges as
+  JSON); the core supplies edges. This is the last of the four-area primitives.
 - **Scheduling** — jobs/agents (implemented, §19-phase). `AdapterJobs`
   (`ListJobs`/`DescribeJob`/`JobHistory`) advertised via `CapJobs`, with `JobRef`/
   `Job`/`JobStep`/`JobRun` value types. The most engine-divergent area: SQL Server

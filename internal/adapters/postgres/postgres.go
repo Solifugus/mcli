@@ -323,13 +323,66 @@ func (a *Adapter) SearchViews(ctx context.Context, text string) ([]adapter.Objec
 		 ORDER BY schemaname, viewname`, text)
 }
 
-// Lineage is not yet implemented for Postgres (design §19, a later phase).
-func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// lineageSQL is the shared view-dependency query over pg_depend/pg_rewrite: a
+// view's rewrite rule (pg_rewrite) has 'n' (normal) dependencies on the tables
+// and views it selects from (pg_class). The %s picks whether the bound name is
+// the dependent (pre: what it uses) or the source (post: what uses it), and the
+// SELECT returns the object on the other side, with relkind mapped to a kind.
+const lineageSQL = `
+SELECT DISTINCT %s_ns.nspname, %s.relname,
+       CASE %s.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'view' ELSE 'table' END
+FROM pg_depend d
+JOIN pg_rewrite r   ON r.oid = d.objid
+JOIN pg_class dep   ON dep.oid = r.ev_class
+JOIN pg_namespace dep_ns ON dep_ns.oid = dep.relnamespace
+JOIN pg_class src   ON src.oid = d.refobjid
+JOIN pg_namespace src_ns ON src_ns.oid = src.relnamespace
+WHERE d.classid = 'pg_rewrite'::regclass
+  AND d.refclassid = 'pg_class'::regclass
+  AND d.deptype = 'n'
+  AND src.oid <> dep.oid
+  AND %s.relname = $2
+  AND ($1 = '' OR %s_ns.nspname = $1)
+ORDER BY 1, 2`
+
+// GetPreLineage returns the tables and views the named view selects from (its
+// inputs), one hop. Postgres tracks view dependencies via rewrite rules, so a
+// table or a non-view object has no pre-lineage and yields an empty list.
+func (a *Adapter) GetPreLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	// Bind name to the dependent (dep) side; return the source (src) side.
+	q := fmt.Sprintf(lineageSQL, "src", "src", "src", "dep", "dep")
+	return a.queryLineage(ctx, q, name)
 }
 
-func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// GetPostLineage returns the views that depend on the named table or view (its
+// consumers), one hop.
+func (a *Adapter) GetPostLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	// Bind name to the source (src) side; return the dependent (dep) side.
+	q := fmt.Sprintf(lineageSQL, "dep", "dep", "dep", "src", "src")
+	return a.queryLineage(ctx, q, name)
+}
+
+// queryLineage runs a lineage query whose two bind params are ($1) the optional
+// schema and ($2) the object name, and whose rows are (schema, name, kind).
+func (a *Adapter) queryLineage(ctx context.Context, sql, name string) ([]adapter.ObjectRef, error) {
+	if a.conn == nil {
+		return nil, errNotConnected
+	}
+	schema, obj := splitName(name)
+	rows, err := a.conn.Query(ctx, sql, schema, obj)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.ObjectRef
+	for rows.Next() {
+		var ref adapter.ObjectRef
+		if err := rows.Scan(&ref.Schema, &ref.Name, &ref.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 // Source returns the definition text of a view (from pg_views) or a
@@ -531,7 +584,7 @@ func roleKind(canLogin bool) string {
 // role/security introspection (pg_roles). Lineage and job scheduling are not yet
 // implemented (Postgres has no native scheduler).
 func (a *Adapter) Capabilities() adapter.CapabilitySet {
-	return adapter.Caps(adapter.CapExplain, adapter.CapSource, adapter.CapTableFunctions, adapter.CapSecurity, adapter.CapSecurityEdit)
+	return adapter.Caps(adapter.CapExplain, adapter.CapLineage, adapter.CapSource, adapter.CapTableFunctions, adapter.CapSecurity, adapter.CapSecurityEdit)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectPostgres }

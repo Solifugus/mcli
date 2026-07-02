@@ -498,6 +498,37 @@ func buildTools() []tool {
 				return jsonString(views)
 			},
 		},
+		{
+			Name:        "get_lineage",
+			Description: "Assemble the dependency graph of an object. direction 'pre' (default) returns what the object depends on (its inputs); 'post' returns what depends on it (its consumers). The graph is walked breadth-first up to 'depth' hops (default 5) and returned as data-flow edges (each edge is source -> consumer). Requires the 'lineage' capability (see get_capabilities).",
+			Schema: objectSchema(map[string]any{
+				"name":      strProp("object name, optionally schema-qualified (schema.name)"),
+				"direction": strProp("'pre' (inputs, default) or 'post' (consumers)"),
+				"depth":     map[string]any{"type": "integer", "description": "maximum hops to walk (default 5)"},
+			}, "name"),
+			Handle: func(ctx context.Context, c *core.Core, args json.RawMessage) (string, error) {
+				var a struct {
+					Name      string `json:"name"`
+					Direction string `json:"direction"`
+					Depth     int    `json:"depth"`
+				}
+				if err := decode(args, &a); err != nil {
+					return "", err
+				}
+				if a.Name == "" {
+					return "", errors.New("name is required")
+				}
+				dir := core.LineagePre
+				if a.Direction == "post" {
+					dir = core.LineagePost
+				}
+				g, err := c.Lineage(ctx, a.Name, dir, a.Depth)
+				if err != nil {
+					return "", err
+				}
+				return jsonString(g)
+			},
+		},
 
 		// --- scheduling: jobs / agents (design §29) ---
 		{

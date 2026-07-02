@@ -324,13 +324,63 @@ func (a *Adapter) SearchViews(ctx context.Context, text string) ([]adapter.Objec
 		 ORDER BY TABLE_SCHEMA, TABLE_NAME`, text)
 }
 
-// Lineage is not yet implemented for SQL Server (design §19, a later phase).
-func (a *Adapter) GetPreLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// objectKindCase maps sys.objects.type to our ObjectKind labels; reused by both
+// lineage directions.
+const objectKindCase = `CASE %s.type WHEN 'V' THEN 'view'
+       WHEN 'P' THEN 'procedure' WHEN 'PC' THEN 'procedure'
+       WHEN 'FN' THEN 'function' WHEN 'IF' THEN 'function' WHEN 'TF' THEN 'function' WHEN 'FS' THEN 'function'
+       ELSE 'table' END`
+
+// GetPreLineage returns the objects the named object references (its inputs),
+// one hop, from sys.sql_expression_dependencies. The referenced object may be
+// unresolved (cross-database or dropped), in which case its kind defaults to
+// table and its schema may be empty.
+func (a *Adapter) GetPreLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT DISTINCT
+       COALESCE(d.referenced_schema_name, SCHEMA_NAME(ro.schema_id), '') AS sch,
+       d.referenced_entity_name AS nm,
+       ` + fmt.Sprintf(objectKindCase, "ro") + `
+FROM sys.sql_expression_dependencies d
+LEFT JOIN sys.objects ro ON ro.object_id = d.referenced_id
+WHERE d.referencing_id = OBJECT_ID(@p1)
+  AND d.referenced_entity_name IS NOT NULL
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
 }
 
-func (a *Adapter) GetPostLineage(context.Context, string) ([]adapter.ObjectRef, error) {
-	return nil, adapter.ErrUnsupported
+// GetPostLineage returns the objects that reference the named object (its
+// consumers), one hop.
+func (a *Adapter) GetPostLineage(ctx context.Context, name string) ([]adapter.ObjectRef, error) {
+	q := `SELECT DISTINCT
+       SCHEMA_NAME(o.schema_id) AS sch, o.name AS nm,
+       ` + fmt.Sprintf(objectKindCase, "o") + `
+FROM sys.sql_expression_dependencies d
+JOIN sys.objects o ON o.object_id = d.referencing_id
+WHERE d.referenced_id = OBJECT_ID(@p1)
+ORDER BY 1, 2`
+	return a.queryLineage(ctx, q, name)
+}
+
+// queryLineage runs a lineage query bound to a single object name (@p1) whose
+// rows are (schema, name, kind).
+func (a *Adapter) queryLineage(ctx context.Context, query, name string) ([]adapter.ObjectRef, error) {
+	if a.db == nil {
+		return nil, errNotConnected
+	}
+	rows, err := a.db.QueryContext(ctx, query, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []adapter.ObjectRef
+	for rows.Next() {
+		var ref adapter.ObjectRef
+		if err := rows.Scan(&ref.Schema, &ref.Name, &ref.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 // Source returns the full definition text of a view, procedure, or function from
@@ -722,7 +772,7 @@ func principalTypeLabel(typ string) string {
 // job introspection (msdb), and principal/security introspection
 // (sys.database_principals). Other features arrive later.
 func (a *Adapter) Capabilities() adapter.CapabilitySet {
-	return adapter.Caps(adapter.CapSource, adapter.CapTableFunctions, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
+	return adapter.Caps(adapter.CapLineage, adapter.CapSource, adapter.CapTableFunctions, adapter.CapJobs, adapter.CapSecurity, adapter.CapSecurityEdit)
 }
 
 func (a *Adapter) Dialect() adapter.Dialect { return adapter.DialectTSQL }

@@ -238,6 +238,85 @@ func (m *Model) cmdSource(args []string) (cmdResult, asyncRun) {
 	}
 }
 
+// cmdLineage assembles and prints the dependency graph of an object as an
+// indented tree — .pre-lineage walks upstream (inputs), .post-lineage walks
+// downstream (consumers). It needs the connected engine to support lineage
+// (CapLineage); engines without dependency catalogs grey out. An optional
+// second argument caps the walk depth.
+func (m *Model) cmdLineage(args []string, dir core.LineageDir) (cmdResult, asyncRun) {
+	verb := "pre"
+	if dir == core.LineagePost {
+		verb = "post"
+	}
+	if len(args) < 1 {
+		return out("usage: ." + verb + "-lineage <object> [depth]"), nil
+	}
+	if m.core.Connected() && !m.core.Supports(adapter.CapLineage) {
+		return out("this server does not expose lineage (see .caps)"), nil
+	}
+	name := args[0]
+	depth := 0
+	if len(args) > 1 {
+		if d, err := strconv.Atoi(args[1]); err == nil {
+			depth = d
+		}
+	}
+	c := m.core
+	return cmdResult{}, func(ctx context.Context) asyncResultMsg {
+		g, err := c.Lineage(ctx, name, dir, depth)
+		if err != nil {
+			return asyncResultMsg{err: err}
+		}
+		return asyncResultMsg{lines: renderLineage(g)}
+	}
+}
+
+// renderLineage draws a lineage graph as an indented tree rooted at its object,
+// following edges in the walk's direction. A node already shown elsewhere in
+// the tree is marked "…" and not re-expanded, so a cyclic or diamond-shaped
+// graph renders finitely.
+func renderLineage(g core.LineageGraph) []string {
+	dir := "used by " // post: consumers
+	if g.Direction == "pre" {
+		dir = "depends on "
+	}
+	lines := []string{lineageLabel(g.Root) + " " + dir + "…"}
+	if len(g.Edges) == 0 {
+		return append(lines, "  (no dependencies found)")
+	}
+	shown := map[string]bool{lineageKey(g.Root): true}
+	var walk func(ref adapter.ObjectRef, indent string)
+	walk = func(ref adapter.ObjectRef, indent string) {
+		for _, ch := range g.Children(ref) {
+			label := lineageLabel(ch)
+			if ch.Type != "" {
+				label += " (" + ch.Type + ")"
+			}
+			if lineageKey(ch) != lineageKey(ref) && shown[lineageKey(ch)] {
+				lines = append(lines, indent+label+" …")
+				continue
+			}
+			lines = append(lines, indent+label)
+			shown[lineageKey(ch)] = true
+			walk(ch, indent+"  ")
+		}
+	}
+	walk(g.Root, "  ")
+	if g.Truncated {
+		lines = append(lines, "  (truncated — graph exceeds the depth/size limit)")
+	}
+	return lines
+}
+
+func lineageLabel(r adapter.ObjectRef) string {
+	if r.Schema != "" {
+		return r.Schema + "." + r.Name
+	}
+	return r.Name
+}
+
+func lineageKey(r adapter.ObjectRef) string { return lineageLabel(r) }
+
 // cmdGrep searches within procedure/function bodies (and their names) for a
 // substring — the Processing-area body search. Like .source it needs CapSource.
 func (m *Model) cmdGrep(args []string) (cmdResult, asyncRun) {
